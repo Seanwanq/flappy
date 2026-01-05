@@ -23,7 +23,8 @@ let getVcVarsAllPath (vsPath: string) =
     if File.Exists path then Some path else None
 
 let patchCommandForMsvc (compiler: string) (args: string) : (string * string) option =
-    if compiler.ToLower() = "cl" || compiler.ToLower() = "cl.exe" || compiler.ToLower() = "msvc" then
+    let c = compiler.ToLower()
+    if c = "cl" || c = "cl.exe" || c = "msvc" || c = "clang-cl" || c = "clang-cl.exe" then
         match findVsInstallPath() with
         | Some vsPath ->
             match getVcVarsAllPath vsPath with

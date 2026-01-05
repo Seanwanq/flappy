@@ -34,8 +34,13 @@ let getAvailableToolchains () =
 
     // Check MSVC
     match findVsInstallPath() with
-    | Some _ -> 
+    | Some vsPath -> 
         toolchains.Add({ Name = "Visual Studio (MSVC)"; Command = "cl"; Type = MSVC; IsAvailable = true })
+        
+        // Check for Clang inside VS
+        let vsClangPath = Path.Combine(vsPath, "VC", "Tools", "Llvm", "x64", "bin", "clang-cl.exe")
+        if File.Exists vsClangPath then
+            toolchains.Add({ Name = "Visual Studio (Clang-CL)"; Command = "clang-cl"; Type = Clang; IsAvailable = true })
     | None -> ()
 
     // Check g++

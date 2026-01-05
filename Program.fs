@@ -24,19 +24,19 @@ let getOrSetupCompiler () =
             compiler
         else
             printfn "Found the following toolchains:"
-            toolchains |> List.iteri (fun i t -> printfn "[%d] %s (%s)" (i + 1) t.Name t.Command)
+            toolchains |> List.iteri (fun i t -> Console.WriteLine($"[{i + 1}] {t.Name} ({t.Command})"))
             
-            printf "Select a default compiler [1-%d]: " toolchains.Length
+            Console.Write($"Select a default compiler [1-{toolchains.Length}]: ")
             let input = Console.ReadLine()
             match Int32.TryParse(input) with
             | true, idx when idx >= 1 && idx <= toolchains.Length ->
                 let selected = toolchains.[idx - 1].Command
                 saveConfig { DefaultCompiler = selected }
-                printfn "Selected %s as default." selected
+                Console.WriteLine($"Selected {selected} as default.")
                 selected
             | _ ->
                 let defaultCompiler = toolchains.[0].Command
-                printfn "Invalid selection. Defaulting to %s." defaultCompiler
+                Console.WriteLine($"Invalid selection. Defaulting to {defaultCompiler}.")
                 saveConfig { DefaultCompiler = defaultCompiler }
                 defaultCompiler
 

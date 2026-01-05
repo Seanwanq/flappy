@@ -57,7 +57,7 @@ let build () =
                     // GCC/Clang: -std=c++17 -o output source
                     // MSVC: /std:c++17 /Fe:output source
                     
-                    let isMsvc = compiler.ToLower().Contains("cl") || compiler.ToLower() = "msvc"
+                    let isMsvc = compiler.ToLower().Contains("cl") || compiler.ToLower() = "msvc" || compiler.ToLower().Contains("clang-cl")
                     
                     let args = 
                         if isMsvc then
