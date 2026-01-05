@@ -17,15 +17,27 @@ type BuildConfig = {
     Output: string
 }
 
+type DependencySource = 
+    | Git of url: string * tag: string option
+    | Url of url: string
+    | Local of path: string
+
+type Dependency = {
+    Name: string
+    Source: DependencySource
+}
+
 type FlappyConfig = {
     Package: PackageConfig
     Build: BuildConfig
+    Dependencies: Dependency list
 }
 
 let defaultConfig = 
     {
         Package = { Name = "untitled"; Version = "0.1.0"; Authors = [] }
         Build = { Compiler = "g++"; Standard = "c++17"; Output = "main" }
+        Dependencies = []
     }
 
 let parse (tomlContent: string) : Result<FlappyConfig, string> =
@@ -37,6 +49,9 @@ let parse (tomlContent: string) : Result<FlappyConfig, string> =
 
         let getString (key: string) (m: TomlTable) (def: string) =
             if m.ContainsKey(key) && m.[key] :? string then m.[key] :?> string else def
+        
+        let getOptString (key: string) (m: TomlTable) =
+            if m.ContainsKey(key) && m.[key] :? string then Some (m.[key] :?> string) else None
 
         let getList (key: string) (m: TomlTable) =
             if m.ContainsKey(key) && m.[key] :? TomlArray then 
@@ -59,6 +74,30 @@ let parse (tomlContent: string) : Result<FlappyConfig, string> =
                   Output = getString "output" build defaultConfig.Build.Output }
             | None -> defaultConfig.Build
 
-        Ok { Package = packageConfig; Build = buildConfig }
+        let dependencies = 
+            match getTable "dependencies" model with
+            | Some deps ->
+                deps.Keys 
+                |> Seq.choose (fun key ->
+                    if deps.[key] :? TomlTable then
+                        let depTable = deps.[key] :?> TomlTable
+                        let source = 
+                            if depTable.ContainsKey("git") then
+                                Some (Git (getString "git" depTable "", getOptString "tag" depTable))
+                            elif depTable.ContainsKey("url") then
+                                Some (Url (getString "url" depTable ""))
+                            elif depTable.ContainsKey("path") then
+                                Some (Local (getString "path" depTable ""))
+                            else
+                                None
+                        match source with
+                        | Some s -> Some { Name = key; Source = s }
+                        | None -> None
+                    else None
+                )
+                |> Seq.toList
+            | None -> []
+
+        Ok { Package = packageConfig; Build = buildConfig; Dependencies = dependencies }
     with
     | ex -> Error ex.Message

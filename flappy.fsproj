@@ -12,6 +12,7 @@
     <Compile Include="GlobalConfig.fs" />
     <Compile Include="VsDevCmd.fs" />
     <Compile Include="Toolchain.fs" />
+    <Compile Include="DependencyManager.fs" />
     <Compile Include="Scaffolding.fs" />
     <Compile Include="Builder.fs" />
     <Compile Include="Program.fs" />
