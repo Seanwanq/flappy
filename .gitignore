@@ -22,3 +22,5 @@ demo_real_msvc/
 
 # User Config (Should be private)
 config.toml
+
+test_interactive_self/

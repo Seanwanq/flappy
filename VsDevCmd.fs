@@ -36,10 +36,10 @@ let patchCommandForMsvc (compiler: string) (args: string) (arch: string) : (stri
                 let newArgs = $"""/c "call "{vcvarsPath}" {arch} && {compiler} {args}" """
                 Some (newCmd, newArgs)
             | None -> 
-                printfn "Warning: Found VS at %s but vcvarsall.bat is missing." vsPath
+                Console.WriteLine($"Warning: Found VS at {vsPath} but vcvarsall.bat is missing.")
                 None
         | None -> 
-            printfn "Warning: MSVC compiler specified but Visual Studio installation not found via vswhere."
+            Console.WriteLine("Warning: MSVC compiler specified but Visual Studio installation not found via vswhere.")
             None
     else
         None

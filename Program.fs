@@ -1,6 +1,7 @@
 module Flappy.Program
 
 open System
+open System.IO
 open Flappy.Scaffolding
 open Flappy.Builder
 open Flappy.GlobalConfig
@@ -90,6 +91,15 @@ let parseInitArgs (args: string list) =
             parse (opts.Add("compiler", val')) tail
         | "-s" :: val' :: tail | "--std" :: val' :: tail ->
             parse (opts.Add("std", val')) tail
+        | "--git" :: val' :: tail -> parse (opts.Add("git", val')) tail
+        | "--url" :: val' :: tail -> parse (opts.Add("url", val')) tail
+        | "--path" :: val' :: tail -> parse (opts.Add("path", val')) tail
+        | "--tag" :: val' :: tail -> parse (opts.Add("tag", val')) tail
+        | "-D" :: val' :: tail | "--define" :: val' :: tail ->
+            // Support multiple defines by appending with a separator
+            let current = opts.TryFind "defines" |> Option.defaultValue ""
+            let next = if current = "" then val' else current + "," + val'
+            parse (opts.Add("defines", next)) tail
         | head :: tail ->
             Console.WriteLine($"Warning: Unknown argument '{head}' ignored.")
             parse opts tail
@@ -147,7 +157,95 @@ let main args =
         | Error e ->
             Console.Error.WriteLine($"Run failed: {e}")
             1
+
+    | ["sync"] ->
+        match sync() with
+        | Ok () -> 0
+        | Error e ->
+            Console.Error.WriteLine($"Sync failed: {e}")
+            1
+
+    | "cache" :: subArgs ->
+        match subArgs with
+        | ["clean"] ->
+            match Flappy.DependencyManager.cleanCache() with
+            | Ok () -> 0
+            | Error e ->
+                Console.Error.WriteLine(e)
+                1
+        | _ ->
+            Console.WriteLine("Usage: flappy cache <command>")
+            Console.WriteLine("Commands:")
+            Console.WriteLine("  clean         Clear the global dependency cache")
+            1
+
+    | "add" :: name :: rest ->
+        // Simple manual parsing for add command
+        let args = parseInitArgs rest // Reusing existing parser logic which produces Map<string, string>
+        
+        let git = args.TryFind "git"
+        let url = args.TryFind "url"
+        let path = args.TryFind "path"
+        let tag = args.TryFind "tag"
+        let defines = 
+            match args.TryFind "defines" with
+            | Some d -> d.Split(',') |> Array.map (fun x -> "\"" + x.Trim() + "\"") |> String.concat ", "
+            | None -> ""
+        
+        let definesPart = if defines = "" then "" else $", defines = [{defines}]"
+        
+        // Validation: exactly one source
+        let sources = [git; url; path] |> List.choose id
+        if sources.Length <> 1 then
+            Console.Error.WriteLine("Error: Please specify exactly one source: --git <url>, --url <url>, or --path <path>")
+            1
+        else
+            let tomlLine = 
+                match git with
+                | Some g -> 
+                    match tag with
+                    | Some t -> $"{name} = {{ git = \"{g}\", tag = \"{t}\"{definesPart} }}"
+                    | None -> $"{name} = {{ git = \"{g}\"{definesPart} }}"
+                | None ->
+                    match url with
+                    | Some u -> $"{name} = {{ url = \"{u}\"{definesPart} }}"
+                    | None ->
+                        match path with
+                        | Some p -> $"{name} = {{ path = \"{p}\"{definesPart} }}"
+                        | None -> "" // Should not happen
             
+            match Config.addDependency "flappy.toml" name tomlLine with
+            | Ok () ->
+                Console.WriteLine($"Added dependency '{name}' to flappy.toml.")
+                match sync() with
+                | Ok () -> 
+                    Console.WriteLine("Dependency installed and locked.")
+                    0
+                | Error e -> 
+                    Console.Error.WriteLine($"Dependency added, but sync failed: {e}")
+                    1
+            | Error e ->
+                Console.Error.WriteLine($"Failed to add dependency: {e}")
+                1
+
+    | "remove" :: [name] | "rm" :: [name] ->
+        match Config.removeDependency "flappy.toml" name with
+        | Ok () ->
+            Console.WriteLine($"Removed dependency '{name}' from flappy.toml.")
+            match sync() with
+            | Ok () -> 
+                // Cleanup the linked directory in packages/
+                let pkgDir = Path.Combine("packages", name)
+                if Directory.Exists(pkgDir) then
+                    try Directory.Delete(pkgDir, true) with _ -> ()
+                0
+            | Error e -> 
+                Console.Error.WriteLine($"Dependency removed from toml, but sync failed: {e}")
+                1
+        | Error e ->
+            Console.Error.WriteLine($"Failed to remove dependency: {e}")
+            1
+
     | _ ->
         Console.WriteLine("Usage: flappy <command> [options]")
         Console.WriteLine("Commands:")
@@ -155,6 +253,14 @@ let main args =
         Console.WriteLine("  init <name> [flags]   Quick setup with flags")
         Console.WriteLine("    --compiler, -c <cmd>")
         Console.WriteLine("    --std, -s <ver>")
+        Console.WriteLine("  add <name> [flags]    Add a dependency")
+        Console.WriteLine("    --git <url> [--tag <tag>]")
+        Console.WriteLine("    --url <url>")
+        Console.WriteLine("    --path <path>")
+        Console.WriteLine("    --define, -D <macro>")
+        Console.WriteLine("  remove <name>         Remove a dependency (alias: rm)")
+        Console.WriteLine("  sync                  Install dependencies and update flappy.lock")
         Console.WriteLine("  build                 Build the project")
         Console.WriteLine("  run                   Build and run the project")
+        Console.WriteLine("  cache clean           Clear the global dependency cache")
         1

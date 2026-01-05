@@ -3,6 +3,7 @@ module Flappy.Builder
 open System
 open System.IO
 open System.Diagnostics
+open System.Runtime.InteropServices
 open Flappy.Config
 open Flappy.VsDevCmd
 open Flappy.DependencyManager
@@ -23,16 +24,16 @@ let runCommand (cmd: string) (args: string) =
         else
             Console.WriteLine(output)
             Console.Error.WriteLine(error)
-            Error (sprintf "Command failed with exit code %d" p.ExitCode)
+            Error $"Command failed with exit code {p.ExitCode}"
     with
-    | ex -> Error (sprintf "Failed to run command: %s" ex.Message)
+    | ex -> Error $"Failed to run command: {ex.Message}"
 
-let installDependencies (deps: Dependency list) : Result<string list, string> =
+let installDependencies (deps: Dependency list) : Result<(string * string) list, string> =
     let results = 
         deps 
         |> List.map (fun d -> 
             match install d with
-            | Ok path -> Ok path
+            | Ok (path, resolved) -> Ok (path, resolved)
             | Error e -> Error $"Failed to install {d.Name}: {e}"
         )
     
@@ -43,13 +44,40 @@ let installDependencies (deps: Dependency list) : Result<string list, string> =
     else
         Ok (results |> List.choose (function Ok p -> Some p | _ -> None))
 
+let sync () =
+    if not (File.Exists "flappy.toml") then
+        Error "flappy.toml not found."
+    else
+        let content = File.ReadAllText "flappy.toml"
+        match Config.parse content with
+        | Error e -> Error $"Failed to parse configuration: {e}"
+        | Ok config ->
+            Console.WriteLine("Syncing dependencies...")
+            match installDependencies config.Dependencies with
+            | Error e -> Error e
+            | Ok results ->
+                let lockEntries = 
+                    results 
+                    |> List.mapi (fun i (path, resolved) ->
+                        let dep = config.Dependencies.[i]
+                        let sourceStr = 
+                            match dep.Source with
+                            | Git (url, _) -> url
+                            | Url url -> url
+                            | Local path -> path
+                        { Name = dep.Name; Source = sourceStr; Resolved = resolved }
+                    )
+                Config.saveLock "flappy.lock" { Entries = lockEntries }
+                Console.WriteLine("flappy.lock updated.")
+                Ok ()
+
 let build () =
     if not (File.Exists "flappy.toml") then
         Error "flappy.toml not found. Are you in a flappy project?"
     else
         let content = File.ReadAllText "flappy.toml"
         match Config.parse content with
-        | Error e -> Error (sprintf "Failed to parse configuration: %s" e)
+        | Error e -> Error $"Failed to parse configuration: {e}"
         | Ok config ->
             if not (Directory.Exists "src") then
                 Error "src directory not found."
@@ -61,7 +89,13 @@ let build () =
                     // Install dependencies
                     match installDependencies config.Dependencies with
                     | Error e -> Error e
-                    | Ok includePaths ->
+                    | Ok results ->
+                        let includePaths = results |> List.map fst
+                        
+                        // Collect all defines (global + from dependencies)
+                        let allDefines = 
+                            config.Build.Defines @ (config.Dependencies |> List.collect (fun d -> d.Defines))
+                        
                         // Ensure output directory exists
                         let outDir = Path.GetDirectoryName(config.Build.Output)
                         if not (String.IsNullOrEmpty outDir) && not (Directory.Exists outDir) then
@@ -89,22 +123,31 @@ let build () =
                         // Include Flags
                         let includeFlags = 
                             if isMsvc then
-                                includePaths |> List.map (fun p -> sprintf "/I\"%s\"" p) |> String.concat " "
+                                includePaths |> List.map (fun p -> $"/I\"{p}\"") |> String.concat " "
                             else
-                                includePaths |> List.map (fun p -> sprintf "-I\"%s\"" p) |> String.concat " "
+                                includePaths |> List.map (fun p -> $"-I\"{p}\"") |> String.concat " "
                         
+                        // Define Flags
+                        let defineFlags =
+                            if isMsvc then
+                                allDefines |> List.map (fun d -> $"/D{d}") |> String.concat " "
+                            else
+                                allDefines |> List.map (fun d -> $"-D{d}") |> String.concat " "
+
                         // Output extension
                         let outputName = 
                             if config.Build.Type.ToLower() = "dll" || config.Build.Type.ToLower() = "shared" then
-                                if isMsvc then config.Build.Output + ".dll" else config.Build.Output + ".so" // or .dylib, simplified
+                                if isMsvc then config.Build.Output + ".dll" 
+                                elif RuntimeInformation.IsOSPlatform(OSPlatform.OSX) then config.Build.Output + ".dylib"
+                                else config.Build.Output + ".so"
                             else
                                 config.Build.Output // .exe added by compiler or implicit
 
                         let args = 
                             if isMsvc then
-                               sprintf "/std:%s /EHsc %s %s %s /Fe:%s %s" config.Build.Standard typeFlags includeFlags archFlags config.Build.Output sources
+                               $"/std:{config.Build.Standard} /EHsc {typeFlags} {includeFlags} {defineFlags} {archFlags} /Fe:{config.Build.Output} {sources}"
                             else
-                               sprintf "-std=%s %s %s %s -o %s %s" config.Build.Standard typeFlags includeFlags archFlags config.Build.Output sources
+                               $"-std={config.Build.Standard} {typeFlags} {includeFlags} {defineFlags} {archFlags} -o {config.Build.Output} {sources}"
 
                         Console.WriteLine($"Compiling [{config.Package.Name}] ({config.Build.Arch}, {config.Build.Type})...")
                         
