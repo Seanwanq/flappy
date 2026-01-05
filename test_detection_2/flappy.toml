@@ -1,9 +1,0 @@
-[package]
-name = "test_detection_2"
-version = "0.1.0"
-authors = ["Your Name"]
-
-[build]
-compiler = "cl"
-standard = "c++17"
-output = "bin/test_detection_2"
