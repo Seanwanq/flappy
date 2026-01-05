@@ -2,16 +2,22 @@ module Flappy.Scaffolding
 
 open System.IO
 
-let defaultToml (name: string) (compiler: string) = 
+type InitOptions = {
+    Name: string
+    Compiler: string
+    Standard: string
+}
+
+let defaultToml (options: InitOptions) = 
     $"""[package]
-name = "{name}"
+name = "{options.Name}"
 version = "0.1.0"
 authors = ["Your Name"]
 
 [build]
-compiler = "{compiler}"
-standard = "c++17"
-output = "bin/{name}"
+compiler = "{options.Compiler}"
+standard = "{options.Standard}"
+output = "bin/{options.Name}"
 """
 
 let defaultMainCpp = """#include <iostream>
@@ -22,8 +28,8 @@ int main() {
 }
 """
 
-let initProject (name: string) (compiler: string) =
-    let root = Directory.CreateDirectory(name)
+let initProject (options: InitOptions) =
+    let root = Directory.CreateDirectory(options.Name)
     let src = root.CreateSubdirectory("src")
     
     let tomlPath = Path.Combine(root.FullName, "flappy.toml")
@@ -32,6 +38,6 @@ let initProject (name: string) (compiler: string) =
     if File.Exists(tomlPath) then
         printfn "Error: flappy.toml already exists."
     else
-        File.WriteAllText(tomlPath, defaultToml name compiler)
+        File.WriteAllText(tomlPath, defaultToml options)
         File.WriteAllText(mainPath, defaultMainCpp)
-        printfn "Created new project `%s` with compiler `%s`" name compiler
+        printfn "Created new project `%s` with compiler `%s` (%s)" options.Name options.Compiler options.Standard

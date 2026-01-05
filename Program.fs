@@ -10,20 +10,20 @@ let getOrSetupCompiler () =
     match loadConfig() with
     | Some config -> config.DefaultCompiler
     | None ->
-        printfn "Welcome to Flappy! First-time setup..."
-        printfn "Scanning for C++ toolchains..."
+        Console.WriteLine("Welcome to Flappy! First-time setup...")
+        Console.WriteLine("Scanning for C++ toolchains...")
         let toolchains = getAvailableToolchains()
         
         if toolchains.IsEmpty then
-            printfn "No standard C++ toolchains found (MSVC, g++, clang++)."
-            printfn "Recommended: Install Visual Studio with C++ workload or MinGW."
-            printf "Enter command for your compiler (e.g. g++): "
+            Console.WriteLine("No standard C++ toolchains found (MSVC, g++, clang++).")
+            Console.WriteLine("Recommended: Install Visual Studio with C++ workload or MinGW.")
+            Console.Write("Enter command for your compiler (e.g. g++): ")
             let input = Console.ReadLine()
             let compiler = if String.IsNullOrWhiteSpace(input) then "g++" else input.Trim()
             saveConfig { DefaultCompiler = compiler }
             compiler
         else
-            printfn "Found the following toolchains:"
+            Console.WriteLine("Found the following toolchains:")
             toolchains |> List.iteri (fun i t -> Console.WriteLine($"[{i + 1}] {t.Name} ({t.Command})"))
             
             Console.Write($"Select a default compiler [1-{toolchains.Length}]: ")
@@ -40,31 +40,65 @@ let getOrSetupCompiler () =
                 saveConfig { DefaultCompiler = defaultCompiler }
                 defaultCompiler
 
+let parseInitArgs (args: string list) =
+    let rec parse (opts: Map<string, string>) (rest: string list) =
+        match rest with
+        | [] -> opts
+        | "-c" :: val' :: tail | "--compiler" :: val' :: tail ->
+            parse (opts.Add("compiler", val')) tail
+        | "-s" :: val' :: tail | "--std" :: val' :: tail ->
+            parse (opts.Add("std", val')) tail
+        | head :: tail ->
+            // Ignore unknown args or handle as name if name not set? 
+            // Name is handled before calling this.
+            Console.WriteLine($"Warning: Unknown argument '{head}' ignored.")
+            parse opts tail
+            
+    parse Map.empty args
+
 [<EntryPoint>]
 let main args =
-    match args with
-    | [| "init"; name |] -> 
-        let compiler = getOrSetupCompiler()
-        initProject name compiler
+    let argsList = args |> Array.toList
+    match argsList with
+    | "init" :: name :: tail -> 
+        let userOpts = parseInitArgs tail
+        
+        let compiler = 
+            match userOpts.TryFind "compiler" with
+            | Some c -> c
+            | None -> getOrSetupCompiler()
+            
+        let standard =
+            match userOpts.TryFind "std" with
+            | Some s -> s
+            | None -> "c++17" // Default standard
+
+        let options = { Name = name; Compiler = compiler; Standard = standard }
+        initProject options
         0
-    | [| "build" |] ->
+        
+    | ["build"] ->
         match build() with
         | Ok () -> 
-            printfn "Build successful."
+            Console.WriteLine("Build successful.")
             0
         | Error e -> 
-            eprintfn "Build failed: %s" e
+            Console.Error.WriteLine($"Build failed: {e}")
             1
-    | [| "run" |] ->
+            
+    | ["run"] ->
         match run() with
         | Ok () -> 0
         | Error e ->
-            eprintfn "Run failed: %s" e
+            Console.Error.WriteLine($"Run failed: {e}")
             1
+            
     | _ ->
-        printfn "Usage: flappy <command> [options]"
-        printfn "Commands:"
-        printfn "  init <name>   Create a new project"
-        printfn "  build         Build the project"
-        printfn "  run           Build and run the project"
+        Console.WriteLine("Usage: flappy <command> [options]")
+        Console.WriteLine("Commands:")
+        Console.WriteLine("  init <name> [flags]   Create a new project")
+        Console.WriteLine("    --compiler, -c <cmd>  Specify compiler (e.g. clang++, g++)")
+        Console.WriteLine("    --std, -s <ver>       Specify C++ standard (e.g. c++20)")
+        Console.WriteLine("  build                 Build the project")
+        Console.WriteLine("  run                   Build and run the project")
         1
