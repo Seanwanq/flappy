@@ -17,11 +17,22 @@ let select (prompt: string) (options: string list) (defaultIndex: int) : string 
     Console.CursorVisible <- false
     
     Console.WriteLine($"{prompt} (Use arrow keys to move, Enter to select)")
+    
+    // Reserve space to prevent scrolling issues during draw
     let startTop = Console.CursorTop
+    let neededLines = options.Length
+    
+    // Force scroll if needed by printing newlines
+    for _ in 1 .. neededLines do Console.WriteLine()
+    Console.SetCursorPosition(0, startTop)
 
     let draw () =
         Console.SetCursorPosition(0, startTop)
         options |> List.iteri (fun i opt ->
+            // Clear line carefully
+            Console.Write(new String(' ', Console.WindowWidth - 1))
+            Console.SetCursorPosition(0, startTop + i)
+            
             if i = index then
                 Console.ForegroundColor <- ConsoleColor.Cyan
                 Console.WriteLine($"> {opt}")
