@@ -25,15 +25,17 @@ let getOrSetupCompiler () =
             compiler
         else
             let options = toolchains |> List.map (fun t -> $"{t.Name} ({t.Command})")
-            let selection = select "Select a default compiler:" options 0
-            // Extract command from selection? Or match index.
-            // Simplified: Re-find based on display string
-            let selected = toolchains |> List.find (fun t -> $"{t.Name} ({t.Command})" = selection)
-            saveConfig { DefaultCompiler = selected.Command }
-            Console.WriteLine($"Selected {selected.Command} as default.")
-            selected.Command
+            match select "Select a default compiler:" options 0 with
+            | Some selection ->
+                let selected = toolchains |> List.find (fun t -> $"{t.Name} ({t.Command})" = selection)
+                saveConfig { DefaultCompiler = selected.Command }
+                Console.WriteLine($"Selected {selected.Command} as default.")
+                selected.Command
+            | None ->
+                Console.WriteLine("Setup cancelled.")
+                exit 0
 
-let runInteractiveInit (nameArg: string option) =
+let runInteractiveInit (nameArg: string option) : InitOptions option =
     Console.WriteLine("Initializing new Flappy project...")
     
     // 1. Name
@@ -45,30 +47,40 @@ let runInteractiveInit (nameArg: string option) =
             let input = Console.ReadLine()
             if String.IsNullOrWhiteSpace(input) then "untitled" else input.Trim()
 
-    // 2. Compiler
-    let toolchains = getAvailableToolchains()
-    let compiler = 
-        if toolchains.IsEmpty then
-            Console.Write("Compiler (e.g. g++): ")
-            let input = Console.ReadLine()
-            if String.IsNullOrWhiteSpace(input) then "g++" else input.Trim()
-        else
-            let opts = toolchains |> List.map (fun t -> t.Command)
-            select "Select Compiler:" opts 0
+    // Helper to chain selections
+    let rec askSteps () = 
+        // 2. Compiler
+        let toolchains = getAvailableToolchains()
+        let compilerResult = 
+            if toolchains.IsEmpty then
+                Console.Write("Compiler (e.g. g++): ")
+                let input = Console.ReadLine()
+                Some (if String.IsNullOrWhiteSpace(input) then "g++" else input.Trim())
+            else
+                let opts = toolchains |> List.map (fun t -> t.Command)
+                select "Select Compiler:" opts 0
+        
+        match compilerResult with
+        | None -> None
+        | Some compiler ->
+            // 3. Standard
+            let standards = ["c++17"; "c++20"; "c++23"; "c++14"; "c++11"]
+            match select "Select C++ Standard:" standards 0 with
+            | None -> None
+            | Some std ->
+                // 4. Arch
+                let archs = ["x64"; "x86"; "arm64"]
+                match select "Select Architecture:" archs 0 with
+                | None -> None
+                | Some arch ->
+                    // 5. Type
+                    let types = ["exe"; "dll"]
+                    match select "Select Project Type:" types 0 with
+                    | None -> None
+                    | Some type' ->
+                        Some { Name = name; Compiler = compiler; Standard = std; Arch = arch; Type = type' }
 
-    // 3. Standard
-    let standards = ["c++17"; "c++20"; "c++23"; "c++14"; "c++11"]
-    let std = select "Select C++ Standard:" standards 0 // Default to c++17
-
-    // 4. Arch
-    let archs = ["x64"; "x86"; "arm64"]
-    let arch = select "Select Architecture:" archs 0 // Default x64
-
-    // 5. Type
-    let types = ["exe"; "dll"]
-    let type' = select "Select Project Type:" types 0 // Default exe
-
-    { Name = name; Compiler = compiler; Standard = std; Arch = arch; Type = type' }
+    askSteps()
 
 let parseInitArgs (args: string list) =
     let rec parse (opts: Map<string, string>) (rest: string list) =
@@ -89,8 +101,6 @@ let main args =
     let argsList = args |> Array.toList
     match argsList with
     | "init" :: tail ->
-        // Check if user passed flags. If yes, use non-interactive mode (or mixed).
-        // If tail is empty or just name, use interactive.
         let isFlag (s: string) = s.StartsWith("-")
         let hasFlags = tail |> List.exists isFlag
         
@@ -105,7 +115,7 @@ let main args =
             let compiler = 
                 match userOpts.TryFind "compiler" with
                 | Some c -> c
-                | None -> getOrSetupCompiler() // Still interactive fallback for default?
+                | None -> getOrSetupCompiler()
             let standard = userOpts.TryFind "std" |> Option.defaultValue "c++17"
             
             let options = { Name = name; Compiler = compiler; Standard = standard; Arch = "x64"; Type = "exe" }
@@ -117,8 +127,9 @@ let main args =
                 | n :: _ -> Some n
                 | [] -> None
             
-            let options = runInteractiveInit nameArg
-            initProject options
+            match runInteractiveInit nameArg with
+            | Some options -> initProject options
+            | None -> Console.WriteLine("Initialization cancelled.")
         0
         
     | ["build"] ->
