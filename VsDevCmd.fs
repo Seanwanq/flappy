@@ -22,7 +22,7 @@ let getVcVarsAllPath (vsPath: string) =
     let path = Path.Combine(vsPath, "VC", "Auxiliary", "Build", "vcvarsall.bat")
     if File.Exists path then Some path else None
 
-let patchCommandForMsvc (compiler: string) (args: string) : (string * string) option =
+let patchCommandForMsvc (compiler: string) (args: string) (arch: string) : (string * string) option =
     let c = compiler.ToLower()
     if c = "cl" || c = "cl.exe" || c = "msvc" || c = "clang-cl" || c = "clang-cl.exe" then
         match findVsInstallPath() with
@@ -33,7 +33,7 @@ let patchCommandForMsvc (compiler: string) (args: string) : (string * string) op
                 // We use cmd /c "call ... && cl ..."
                 let newCmd = "cmd.exe"
                 // Using triple quotes to safely embed double quotes
-                let newArgs = $"""/c "call "{vcvarsPath}" x64 && {compiler} {args}" """
+                let newArgs = $"""/c "call "{vcvarsPath}" {arch} && {compiler} {args}" """
                 Some (newCmd, newArgs)
             | None -> 
                 printfn "Warning: Found VS at %s but vcvarsall.bat is missing." vsPath

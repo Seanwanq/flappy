@@ -6,6 +6,8 @@ type InitOptions = {
     Name: string
     Compiler: string
     Standard: string
+    Arch: string
+    Type: string
 }
 
 let defaultToml (options: InitOptions) = 
@@ -17,6 +19,8 @@ authors = ["Your Name"]
 [build]
 compiler = "{options.Compiler}"
 standard = "{options.Standard}"
+arch = "{options.Arch}"
+type = "{options.Type}"
 output = "bin/{options.Name}"
 """
 
@@ -40,4 +44,4 @@ let initProject (options: InitOptions) =
     else
         File.WriteAllText(tomlPath, defaultToml options)
         File.WriteAllText(mainPath, defaultMainCpp)
-        printfn "Created new project `%s` with compiler `%s` (%s)" options.Name options.Compiler options.Standard
+        printfn "Created new project `%s` [%s, %s] with compiler `%s` (%s)" options.Name options.Type options.Arch options.Compiler options.Standard

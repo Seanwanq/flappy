@@ -15,6 +15,8 @@ type BuildConfig = {
     Compiler: string
     Standard: string
     Output: string
+    Arch: string
+    Type: string
 }
 
 type DependencySource = 
@@ -36,7 +38,7 @@ type FlappyConfig = {
 let defaultConfig = 
     {
         Package = { Name = "untitled"; Version = "0.1.0"; Authors = [] }
-        Build = { Compiler = "g++"; Standard = "c++17"; Output = "main" }
+        Build = { Compiler = "g++"; Standard = "c++17"; Output = "main"; Arch = "x64"; Type = "exe" }
         Dependencies = []
     }
 
@@ -71,7 +73,9 @@ let parse (tomlContent: string) : Result<FlappyConfig, string> =
             | Some build ->
                 { Compiler = getString "compiler" build defaultConfig.Build.Compiler
                   Standard = getString "standard" build defaultConfig.Build.Standard
-                  Output = getString "output" build defaultConfig.Build.Output }
+                  Output = getString "output" build defaultConfig.Build.Output
+                  Arch = getString "arch" build defaultConfig.Build.Arch
+                  Type = getString "type" build defaultConfig.Build.Type }
             | None -> defaultConfig.Build
 
         let dependencies = 

@@ -5,6 +5,7 @@ open Flappy.Scaffolding
 open Flappy.Builder
 open Flappy.GlobalConfig
 open Flappy.Toolchain
+open Flappy.Interactive
 
 let getOrSetupCompiler () =
     match loadConfig() with
@@ -23,22 +24,51 @@ let getOrSetupCompiler () =
             saveConfig { DefaultCompiler = compiler }
             compiler
         else
-            Console.WriteLine("Found the following toolchains:")
-            toolchains |> List.iteri (fun i t -> Console.WriteLine($"[{i + 1}] {t.Name} ({t.Command})"))
-            
-            Console.Write($"Select a default compiler [1-{toolchains.Length}]: ")
+            let options = toolchains |> List.map (fun t -> $"{t.Name} ({t.Command})")
+            let selection = select "Select a default compiler:" options 0
+            // Extract command from selection? Or match index.
+            // Simplified: Re-find based on display string
+            let selected = toolchains |> List.find (fun t -> $"{t.Name} ({t.Command})" = selection)
+            saveConfig { DefaultCompiler = selected.Command }
+            Console.WriteLine($"Selected {selected.Command} as default.")
+            selected.Command
+
+let runInteractiveInit (nameArg: string option) =
+    Console.WriteLine("Initializing new Flappy project...")
+    
+    // 1. Name
+    let name = 
+        match nameArg with
+        | Some n -> n
+        | None -> 
+            Console.Write("Project Name: ")
             let input = Console.ReadLine()
-            match Int32.TryParse(input) with
-            | true, idx when idx >= 1 && idx <= toolchains.Length ->
-                let selected = toolchains.[idx - 1].Command
-                saveConfig { DefaultCompiler = selected }
-                Console.WriteLine($"Selected {selected} as default.")
-                selected
-            | _ ->
-                let defaultCompiler = toolchains.[0].Command
-                Console.WriteLine($"Invalid selection. Defaulting to {defaultCompiler}.")
-                saveConfig { DefaultCompiler = defaultCompiler }
-                defaultCompiler
+            if String.IsNullOrWhiteSpace(input) then "untitled" else input.Trim()
+
+    // 2. Compiler
+    let toolchains = getAvailableToolchains()
+    let compiler = 
+        if toolchains.IsEmpty then
+            Console.Write("Compiler (e.g. g++): ")
+            let input = Console.ReadLine()
+            if String.IsNullOrWhiteSpace(input) then "g++" else input.Trim()
+        else
+            let opts = toolchains |> List.map (fun t -> t.Command)
+            select "Select Compiler:" opts 0
+
+    // 3. Standard
+    let standards = ["c++17"; "c++20"; "c++23"; "c++14"; "c++11"]
+    let std = select "Select C++ Standard:" standards 0 // Default to c++17
+
+    // 4. Arch
+    let archs = ["x64"; "x86"; "arm64"]
+    let arch = select "Select Architecture:" archs 0 // Default x64
+
+    // 5. Type
+    let types = ["exe"; "dll"]
+    let type' = select "Select Project Type:" types 0 // Default exe
+
+    { Name = name; Compiler = compiler; Standard = std; Arch = arch; Type = type' }
 
 let parseInitArgs (args: string list) =
     let rec parse (opts: Map<string, string>) (rest: string list) =
@@ -49,8 +79,6 @@ let parseInitArgs (args: string list) =
         | "-s" :: val' :: tail | "--std" :: val' :: tail ->
             parse (opts.Add("std", val')) tail
         | head :: tail ->
-            // Ignore unknown args or handle as name if name not set? 
-            // Name is handled before calling this.
             Console.WriteLine($"Warning: Unknown argument '{head}' ignored.")
             parse opts tail
             
@@ -60,21 +88,37 @@ let parseInitArgs (args: string list) =
 let main args =
     let argsList = args |> Array.toList
     match argsList with
-    | "init" :: name :: tail -> 
-        let userOpts = parseInitArgs tail
+    | "init" :: tail ->
+        // Check if user passed flags. If yes, use non-interactive mode (or mixed).
+        // If tail is empty or just name, use interactive.
+        let isFlag (s: string) = s.StartsWith("-")
+        let hasFlags = tail |> List.exists isFlag
         
-        let compiler = 
-            match userOpts.TryFind "compiler" with
-            | Some c -> c
-            | None -> getOrSetupCompiler()
+        if hasFlags then
+            // Legacy/Flag mode
+            let name, argsToParse = 
+                match tail with
+                | n :: rest when not (isFlag n) -> n, rest
+                | _ -> "untitled", tail
             
-        let standard =
-            match userOpts.TryFind "std" with
-            | Some s -> s
-            | None -> "c++17" // Default standard
-
-        let options = { Name = name; Compiler = compiler; Standard = standard }
-        initProject options
+            let userOpts = parseInitArgs argsToParse
+            let compiler = 
+                match userOpts.TryFind "compiler" with
+                | Some c -> c
+                | None -> getOrSetupCompiler() // Still interactive fallback for default?
+            let standard = userOpts.TryFind "std" |> Option.defaultValue "c++17"
+            
+            let options = { Name = name; Compiler = compiler; Standard = standard; Arch = "x64"; Type = "exe" }
+            initProject options
+        else
+            // Interactive mode
+            let nameArg = 
+                match tail with
+                | n :: _ -> Some n
+                | [] -> None
+            
+            let options = runInteractiveInit nameArg
+            initProject options
         0
         
     | ["build"] ->
@@ -96,9 +140,10 @@ let main args =
     | _ ->
         Console.WriteLine("Usage: flappy <command> [options]")
         Console.WriteLine("Commands:")
-        Console.WriteLine("  init <name> [flags]   Create a new project")
-        Console.WriteLine("    --compiler, -c <cmd>  Specify compiler (e.g. clang++, g++)")
-        Console.WriteLine("    --std, -s <ver>       Specify C++ standard (e.g. c++20)")
+        Console.WriteLine("  init [name]           Start interactive setup")
+        Console.WriteLine("  init <name> [flags]   Quick setup with flags")
+        Console.WriteLine("    --compiler, -c <cmd>")
+        Console.WriteLine("    --std, -s <ver>")
         Console.WriteLine("  build                 Build the project")
         Console.WriteLine("  run                   Build and run the project")
         1
