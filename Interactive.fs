@@ -18,14 +18,26 @@ let select (prompt: string) (options: string list) (defaultIndex: int) : string 
     
     Console.WriteLine($"{prompt} (Use arrow keys to move, Enter to select)")
     
-    // Reserve space to prevent scrolling issues during draw
-    let startTop = Console.CursorTop
+    // Ensure we have enough space at the bottom
     let neededLines = options.Length
+    let bottom = Console.CursorTop + neededLines
+    if bottom >= Console.BufferHeight then
+        // If we are close to the buffer limit, this is tricky.
+        // But usually BufferHeight is large. If it's small (WindowHeight), we might scroll.
+        // Let's just print newlines to force scroll if we are near WindowHeight
+        let overflow = bottom - Console.WindowHeight
+        if overflow > 0 then
+             for _ in 1 .. overflow + 1 do Console.WriteLine()
     
-    // Force scroll if needed by printing newlines
-    for _ in 1 .. neededLines do Console.WriteLine()
-    Console.SetCursorPosition(0, startTop)
-
+    // Now capture the safe starting position
+    let startTop = Console.CursorTop
+    
+    // Reserve the space explicitly by printing blank lines
+    // This ensures that even if we are at the bottom, we "own" these lines now.
+    for _ in options do Console.WriteLine(new String(' ', Console.WindowWidth - 1))
+    
+    // Now we can safely jump back to startTop
+    
     let draw () =
         Console.SetCursorPosition(0, startTop)
         options |> List.iteri (fun i opt ->
