@@ -1,0 +1,24 @@
+# .NET
+bin/
+obj/
+dist/
+dist_aot/
+*.user
+*.userosscache
+*.sln.docuser
+
+# Flappy specifics
+GEMINI.md
+.local/
+test_setup/
+demo_real_msvc/
+
+# OS/VS
+.vs/
+.idea/
+.vscode/
+*.swp
+*.bak
+
+# User Config (Should be private)
+config.toml
