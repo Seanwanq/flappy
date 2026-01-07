@@ -6,197 +6,256 @@ open System.Text.RegularExpressions
 open Tomlyn
 open Tomlyn.Model
 
-type PackageConfig = {
-    Name: string
-    Version: string
-    Authors: string list
-}
+type PackageConfig =
+    {
+        Name: string
+        Version: string
+        Authors: string list
+    }
 
-type BuildConfig = {
-    Compiler: string
-    Standard: string
-    Output: string
-    Arch: string
-    Type: string
-    Defines: string list
-}
+type BuildConfig =
+    {
+        Compiler: string
+        Standard: string
+        Output: string
+        Arch: string
+        Type: string
+        Defines: string list
+    }
 
-type DependencySource = 
+type DependencySource =
     | Git of url: string * tag: string option
     | Url of url: string
     | Local of path: string
 
-type Dependency = {
-    Name: string
-    Source: DependencySource
-    Defines: string list
-}
-
-type FlappyConfig = {
-    Package: PackageConfig
-    Build: BuildConfig
-    Dependencies: Dependency list
-}
-
-type LockEntry = {
-    Name: string
-    Source: string
-    Resolved: string
-}
-
-type LockConfig = {
-    Entries: LockEntry list
-}
-
-let defaultConfig = 
+type Dependency =
     {
-        Package = { Name = "untitled"; Version = "0.1.0"; Authors = [] }
-        Build = { Compiler = "g++"; Standard = "c++17"; Output = "main"; Arch = "x64"; Type = "exe"; Defines = [] }
+        Name: string
+        Source: DependencySource
+        Defines: string list
+    }
+
+type FlappyConfig =
+    {
+        Package: PackageConfig
+        Build: BuildConfig
+        Dependencies: Dependency list
+    }
+
+type LockEntry =
+    {
+        Name: string
+        Source: string
+        Resolved: string
+    }
+
+type LockConfig = { Entries: LockEntry list }
+
+let defaultConfig =
+    {
+        Package =
+            {
+                Name = "untitled"
+                Version = "0.1.0"
+                Authors = []
+            }
+        Build =
+            {
+                Compiler = "g++"
+                Standard = "c++17"
+                Output = "main"
+                Arch = "x64"
+                Type = "exe"
+                Defines = []
+            }
         Dependencies = []
     }
 
 let parse (tomlContent: string) : Result<FlappyConfig, string> =
     try
-        let model = Toml.ToModel(tomlContent)
-        
-        let getTable (key: string) (m: TomlTable) = 
-            if m.ContainsKey(key) && m.[key] :? TomlTable then Some (m.[key] :?> TomlTable) else None
+        let model = Toml.ToModel tomlContent
+
+        let getTable (key: string) (m: TomlTable) =
+            if m.ContainsKey(key) && m.[key] :? TomlTable then
+                Some(m.[key] :?> TomlTable)
+            else
+                None
 
         let getString (key: string) (m: TomlTable) (def: string) =
-            if m.ContainsKey(key) && m.[key] :? string then m.[key] :?> string else def
-        
+            if m.ContainsKey(key) && m.[key] :? string then
+                m.[key] :?> string
+            else
+                def
+
         let getOptString (key: string) (m: TomlTable) =
-            if m.ContainsKey(key) && m.[key] :? string then Some (m.[key] :?> string) else None
+            if m.ContainsKey key && m.[key] :? string then
+                Some(m.[key] :?> string)
+            else
+                None
 
         let getList (key: string) (m: TomlTable) =
-            if m.ContainsKey(key) && m.[key] :? TomlArray then 
+            if m.ContainsKey key && m.[key] :? TomlArray then
                 (m.[key] :?> TomlArray) |> Seq.cast<obj> |> Seq.map string |> Seq.toList
-            else []
+            else
+                []
 
-        let packageConfig = 
+        let packageConfig =
             match getTable "package" model with
-            | Some pkg -> 
-                { Name = getString "name" pkg defaultConfig.Package.Name
-                  Version = getString "version" pkg defaultConfig.Package.Version
-                  Authors = getList "authors" pkg }
+            | Some pkg ->
+                {
+                    Name = getString "name" pkg defaultConfig.Package.Name
+                    Version = getString "version" pkg defaultConfig.Package.Version
+                    Authors = getList "authors" pkg
+                }
             | None -> defaultConfig.Package
 
         let buildConfig =
             match getTable "build" model with
             | Some build ->
-                { Compiler = getString "compiler" build defaultConfig.Build.Compiler
-                  Standard = getString "standard" build defaultConfig.Build.Standard
-                  Output = getString "output" build defaultConfig.Build.Output
-                  Arch = getString "arch" build defaultConfig.Build.Arch
-                  Type = getString "type" build defaultConfig.Build.Type
-                  Defines = getList "defines" build }
-            | None -> { defaultConfig.Build with Defines = [] }
+                {
+                    Compiler = getString "compiler" build defaultConfig.Build.Compiler
+                    Standard = getString "standard" build defaultConfig.Build.Standard
+                    Output = getString "output" build defaultConfig.Build.Output
+                    Arch = getString "arch" build defaultConfig.Build.Arch
+                    Type = getString "type" build defaultConfig.Build.Type
+                    Defines = getList "defines" build
+                }
+            | None ->
+                { defaultConfig.Build with
+                    Defines = []
+                }
 
-        let dependencies = 
+        let dependencies =
             match getTable "dependencies" model with
             | Some deps ->
-                deps.Keys 
+                deps.Keys
                 |> Seq.choose (fun key ->
                     if deps.[key] :? TomlTable then
                         let depTable = deps.[key] :?> TomlTable
-                        let source = 
+
+                        let source =
                             if depTable.ContainsKey("git") then
-                                Some (Git (getString "git" depTable "", getOptString "tag" depTable))
+                                Some(Git(getString "git" depTable "", getOptString "tag" depTable))
                             elif depTable.ContainsKey("url") then
-                                Some (Url (getString "url" depTable ""))
+                                Some(Url(getString "url" depTable ""))
                             elif depTable.ContainsKey("path") then
-                                Some (Local (getString "path" depTable ""))
+                                Some(Local(getString "path" depTable ""))
                             else
                                 None
-                        
+
                         let depDefines = getList "defines" depTable
 
                         match source with
-                        | Some s -> Some { Name = key; Source = s; Defines = depDefines }
+                        | Some s ->
+                            Some
+                                {
+                                    Name = key
+                                    Source = s
+                                    Defines = depDefines
+                                }
                         | None -> None
-                    else None
-                )
+                    else
+                        None)
                 |> Seq.toList
             | None -> []
 
-        Ok { Package = packageConfig; Build = buildConfig; Dependencies = dependencies }
-    with
-    | ex -> Error ex.Message
+        Ok
+            {
+                Package = packageConfig
+                Build = buildConfig
+                Dependencies = dependencies
+            }
+    with ex ->
+        Error ex.Message
 
 let parseLock (tomlContent: string) : LockConfig =
     try
-        let model = Toml.ToModel(tomlContent)
-        let entries = 
-            if model.ContainsKey("dependencies") && model.["dependencies"] :? TomlArray then
-                (model.["dependencies"] :?> TomlArray) 
+        let model = Toml.ToModel tomlContent
+
+        let entries =
+            if model.ContainsKey "dependencies" && model.["dependencies"] :? TomlArray then
+                (model.["dependencies"] :?> TomlArray)
                 |> Seq.cast<TomlTable>
-                |> Seq.map (fun t -> 
-                    { Name = t.["name"] :?> string
-                      Source = t.["source"] :?> string
-                      Resolved = t.["resolved"] :?> string })
+                |> Seq.map (fun t ->
+                    {
+                        Name = t.["name"] :?> string
+                        Source = t.["source"] :?> string
+                        Resolved = t.["resolved"] :?> string
+                    })
                 |> Seq.toList
-            else []
+            else
+                []
+
         { Entries = entries }
-    with _ -> { Entries = [] }
+    with _ ->
+        { Entries = [] }
 
 let saveLock (filePath: string) (lock: LockConfig) =
     let sb = Text.StringBuilder()
-    sb.AppendLine("# This file is automatically generated by flappy.") |> ignore
-    sb.AppendLine("# It is used to lock dependencies to specific versions.") |> ignore
+    sb.AppendLine "# This file is automatically generated by flappy." |> ignore
+
+    sb.AppendLine "# It is used to lock dependencies to specific versions."
+    |> ignore
+
     sb.AppendLine() |> ignore
-    sb.AppendLine("[[dependencies]]") |> ignore
-    lock.Entries |> List.iteri (fun i e ->
-        if i > 0 then sb.AppendLine("\n[[dependencies]]") |> ignore
-        sb.AppendLine($"""name = "{e.Name}" """) |> ignore
-        sb.AppendLine($"""source = "{e.Source}" """) |> ignore
-        sb.AppendLine($"""resolved = "{e.Resolved}" """) |> ignore
-    )
+    sb.AppendLine "[[dependencies]]" |> ignore
+
+    lock.Entries
+    |> List.iteri (fun i e ->
+        if i > 0 then
+            sb.AppendLine "\n[[dependencies]]" |> ignore
+
+        sb.AppendLine $"""name = "{e.Name}" """ |> ignore
+        sb.AppendLine $"""source = "{e.Source}" """ |> ignore
+        sb.AppendLine $"""resolved = "{e.Resolved}" """ |> ignore)
+
     File.WriteAllText(filePath, sb.ToString())
 
 let addDependency (filePath: string) (name: string) (tomlLine: string) : Result<unit, string> =
     try
-        if not (File.Exists(filePath)) then
+        if not (File.Exists filePath) then
             Error "flappy.toml not found."
         else
-            let lines = File.ReadAllLines(filePath) |> Array.toList
-            
+            let lines = File.ReadAllLines filePath |> Array.toList
+
             // Regex to check if dependency is already defined: ^\s*name\s*=
-            let regex = Regex($"^\s*{Regex.Escape(name)}\s*=", RegexOptions.IgnoreCase)
-            let exists = lines |> List.exists (fun l -> regex.IsMatch(l))
-            
+            let regex = Regex($"^\s*{Regex.Escape name}\s*=", RegexOptions.IgnoreCase)
+            let exists = lines |> List.exists (fun l -> regex.IsMatch l)
+
             if exists then
                 Error $"Dependency '{name}' already exists in flappy.toml."
             else
-                let depHeaderIndex = lines |> List.tryFindIndex (fun l -> l.Trim() = "[dependencies]")
-                
+                let depHeaderIndex =
+                    lines |> List.tryFindIndex (fun l -> l.Trim() = "[dependencies]")
+
                 match depHeaderIndex with
                 | Some idx ->
                     // Insert after [dependencies]
-                    let newLines = lines.[0..idx] @ [tomlLine] @ lines.[idx+1..]
+                    let newLines = lines.[0..idx] @ [ tomlLine ] @ lines.[idx + 1 ..]
                     File.WriteAllLines(filePath, newLines)
-                    Ok ()
+                    Ok()
                 | None ->
                     // Append to end
-                    let newLines = lines @ [""; "[dependencies]"; tomlLine]
+                    let newLines = lines @ [ ""; "[dependencies]"; tomlLine ]
                     File.WriteAllLines(filePath, newLines)
-                    Ok ()
-    with
-    | ex -> Error ex.Message
+                    Ok()
+    with ex ->
+        Error ex.Message
 
 let removeDependency (filePath: string) (name: string) : Result<unit, string> =
     try
-        if not (File.Exists(filePath)) then
+        if not (File.Exists filePath) then
             Error "flappy.toml not found."
         else
-            let lines = File.ReadAllLines(filePath) |> Array.toList
-            let regex = Regex($"^\s*{Regex.Escape(name)}\s*=", RegexOptions.IgnoreCase)
-            
-            let newLines = lines |> List.filter (fun l -> not (regex.IsMatch(l)))
-            
+            let lines = File.ReadAllLines filePath |> Array.toList
+            let regex = Regex($"^\s*{Regex.Escape name}\s*=", RegexOptions.IgnoreCase)
+
+            let newLines = lines |> List.filter (fun l -> not (regex.IsMatch l))
+
             if newLines.Length = lines.Length then
                 Error $"Dependency '{name}' not found in flappy.toml."
             else
                 File.WriteAllLines(filePath, newLines)
-                Ok ()
-    with
-    | ex -> Error ex.Message
+                Ok()
+    with ex ->
+        Error ex.Message
