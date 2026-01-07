@@ -24,3 +24,4 @@ demo_real_msvc/
 config.toml
 
 test_interactive_self/
+.fake
