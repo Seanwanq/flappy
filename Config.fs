@@ -244,7 +244,8 @@ let updatePlatformConfig (filePath: string) (platform: string) (compiler: string
             platformTable.["standard"] <- std
             
             let newContent = Toml.FromModel(model)
-            File.WriteAllText(filePath, newContent)
+            let prettyContent = Regex.Replace(newContent, @"\n(\[build\.)", "\n\n$1")
+            File.WriteAllText(filePath, prettyContent)
             Ok ()
     with ex -> Error ex.Message
 
@@ -293,7 +294,7 @@ let addDependency (filePath: string) (name: string) (tomlLine: string) : Result<
                     File.WriteAllLines(filePath, newLines)
                     Ok()
                 | None ->
-                    let newLines = lines @ [ ""; "[dependencies]"; tomlLine ]
+                    let newLines = lines @ [ ""; ""; "[dependencies]"; tomlLine ]
                     File.WriteAllLines(filePath, newLines)
                     Ok()
     with ex -> Error ex.Message
