@@ -193,9 +193,14 @@ let main args =
             | None -> Console.WriteLine("Initialization cancelled.")
         0
     | "build" :: tail ->
-        let profile = if List.contains "--release" tail then Release else Debug
+        let profileArg, otherArgs = 
+            match tail with
+            | head :: rest when not (head.StartsWith("-")) -> Some head, rest
+            | _ -> None, tail
+        
+        let profile = if List.contains "--release" otherArgs then Release else Debug
         let sw = Diagnostics.Stopwatch.StartNew()
-        match build profile with
+        match build profile profileArg with
         | Ok () -> 
             sw.Stop()
             let profileName = if profile = Release then "release" else "dev"
@@ -205,16 +210,38 @@ let main args =
             Console.Error.WriteLine($"Build failed: {e}")
             1
     | "run" :: tail ->
-        let profile = if List.contains "--release" tail then Release else Debug
+        let profileArg, otherArgs = 
+            match tail with
+            | head :: rest when not (head.StartsWith("-")) -> Some head, rest
+            | _ -> None, tail
+
+        let profile = if List.contains "--release" otherArgs then Release else Debug
         let extraArgs =
-            match tail |> List.tryFindIndex (fun x -> x = "--") with
-            | Some idx -> tail |> List.skip (idx + 1) |> String.concat " "
+            match otherArgs |> List.tryFindIndex (fun x -> x = "--") with
+            | Some idx -> otherArgs |> List.skip (idx + 1) |> String.concat " "
             | None -> ""
         let sw = Diagnostics.Stopwatch.StartNew()
-        match run profile extraArgs with
+        match run profile extraArgs profileArg with
         | Ok () -> sw.Stop(); 0
         | Error e ->
             Console.Error.WriteLine($"Run failed: {e}")
+            1
+    | "test" :: tail ->
+        let profileArg, otherArgs = 
+            match tail with
+            | head :: rest when not (head.StartsWith("-")) -> Some head, rest
+            | _ -> None, tail
+
+        let profile = if List.contains "--release" otherArgs then Release else Debug
+        let extraArgs =
+            match otherArgs |> List.tryFindIndex (fun x -> x = "--") with
+            | Some idx -> otherArgs |> List.skip (idx + 1) |> String.concat " "
+            | None -> ""
+        let sw = Diagnostics.Stopwatch.StartNew()
+        match runTest profile extraArgs profileArg with
+        | Ok () -> sw.Stop(); 0
+        | Error e ->
+            Console.Error.WriteLine($"Test failed: {e}")
             1
     | ["xplat"] ->
         runXPlatWizard ()
@@ -224,7 +251,7 @@ let main args =
             1
         else
             let content = File.ReadAllText "flappy.toml"
-            match Config.parse content with
+            match Config.parse content None with
             | Error e -> 
                 Console.Error.WriteLine($"Failed to parse flappy.toml: {e}")
                 1
@@ -332,6 +359,7 @@ let main args =
         Console.WriteLine("  sync                  Install dependencies and update flappy.lock")
         Console.WriteLine("  build [--release]     Build the project")
         Console.WriteLine("  run [--release]       Build and run the project")
+        Console.WriteLine("  test [--release]      Build and run tests")
         Console.WriteLine("  xplat                 Configure toolchains for other platforms")
         Console.WriteLine("  clean                 Remove build artifacts (bin/ and obj/)")
         Console.WriteLine("  cache clean           Clear the global dependency cache")

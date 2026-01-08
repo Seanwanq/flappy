@@ -55,9 +55,15 @@ type DependencyMetadata =
       Libs: string list
       Resolved: string }
 
+type TestConfig = 
+    { Sources: string list
+      Output: string
+      Defines: string list }
+
 type FlappyConfig = 
     { Package: PackageConfig
       Build: BuildConfig
+      Test: TestConfig option
       Dependencies: Dependency list }
 
 type LockEntry = 
@@ -110,10 +116,11 @@ let defaultConfig =
                 Defines = []
                 Flags = []
             }
+        Test = None
         Dependencies = []
     }
 
-let parse (tomlContent: string) : Result<FlappyConfig, string> =
+let parse (tomlContent: string) (profileOverride: string option) : Result<FlappyConfig, string> =
     try
         let model = Toml.ToModel tomlContent
 
@@ -151,40 +158,63 @@ let parse (tomlContent: string) : Result<FlappyConfig, string> =
                 }
             | None -> defaultConfig.Package
 
+        let merge (baseCfg: BuildConfig) (overrides: TomlTable) =
+            { Compiler = getString "compiler" overrides baseCfg.Compiler
+              Language = getString "language" overrides baseCfg.Language
+              Standard = getString "standard" overrides baseCfg.Standard
+              Output = getString "output" overrides baseCfg.Output
+              Arch = getString "arch" overrides baseCfg.Arch
+              Type = getString "type" overrides baseCfg.Type
+              Defines = baseCfg.Defines @ (getList "defines" overrides)
+              Flags = baseCfg.Flags @ (getList "flags" overrides) }
+
         let buildConfig =
             match getTable "build" model with
             | Some build ->
                 // 1. Get base values
-                let baseCompiler = getString "compiler" build defaultConfig.Build.Compiler
-                let baseLanguage = getString "language" build defaultConfig.Build.Language
-                let baseStandard = getString "standard" build defaultConfig.Build.Standard
-                let baseOutput = getString "output" build defaultConfig.Build.Output
-                let baseArch = getString "arch" build defaultConfig.Build.Arch
-                let baseType = getString "type" build defaultConfig.Build.Type
-                let baseDefines = getList "defines" build
-                let baseFlags = getList "flags" build
+                let baseCfg = 
+                    { defaultConfig.Build with
+                        Compiler = getString "compiler" build defaultConfig.Build.Compiler
+                        Language = getString "language" build defaultConfig.Build.Language
+                        Standard = getString "standard" build defaultConfig.Build.Standard
+                        Output = getString "output" build defaultConfig.Build.Output
+                        Arch = getString "arch" build defaultConfig.Build.Arch
+                        Type = getString "type" build defaultConfig.Build.Type
+                        Defines = getList "defines" build
+                        Flags = getList "flags" build }
 
-                // 2. Identify current platform
                 let platformKey = 
                     if RuntimeInformation.IsOSPlatform(OSPlatform.Windows) then "windows"
                     elif RuntimeInformation.IsOSPlatform(OSPlatform.Linux) then "linux"
                     elif RuntimeInformation.IsOSPlatform(OSPlatform.OSX) then "macos"
                     else "unknown"
 
-                // 3. Apply overrides if platform table exists
-                match getTable platformKey build with
-                | Some overrides ->
-                    { Compiler = getString "compiler" overrides baseCompiler
-                      Language = getString "language" overrides baseLanguage
-                      Standard = getString "standard" overrides baseStandard
-                      Output = getString "output" overrides baseOutput
-                      Arch = getString "arch" overrides baseArch
-                      Type = getString "type" overrides baseType
-                      Defines = baseDefines @ (getList "defines" overrides)
-                      Flags = baseFlags @ (getList "flags" overrides) }
+                match profileOverride with
+                | Some profile ->
+                    // Flow: Base -> Profile -> Profile.Platform
+                    match getTable profile build with
+                    | Some profTable ->
+                        let profCfg = merge baseCfg profTable
+                        match getTable platformKey profTable with
+                        | Some profPlatTable -> merge profCfg profPlatTable
+                        | None -> profCfg
+                    | None -> baseCfg // Profile not found, fallback to base? Or error? Fallback for now.
                 | None ->
-                    { Compiler = baseCompiler; Language = baseLanguage; Standard = baseStandard; Output = baseOutput; Arch = baseArch; Type = baseType; Defines = baseDefines; Flags = baseFlags }
+                    // Flow: Base -> Platform
+                    match getTable platformKey build with
+                    | Some platTable -> merge baseCfg platTable
+                    | None -> baseCfg
             | None -> { defaultConfig.Build with Defines = []; Flags = [] }
+
+        let testConfig =
+            match getTable "test" model with
+            | Some test ->
+                Some {
+                    Sources = getList "sources" test
+                    Output = getString "output" test "bin/test_runner"
+                    Defines = getList "defines" test
+                }
+            | None -> None
 
         let dependencies =
             match getTable "dependencies" model with
@@ -212,7 +242,7 @@ let parse (tomlContent: string) : Result<FlappyConfig, string> =
                 |> Seq.toList
             | None -> []
 
-        Ok { Package = packageConfig; Build = buildConfig; Dependencies = dependencies }
+        Ok { Package = packageConfig; Build = buildConfig; Test = testConfig; Dependencies = dependencies }
     with ex -> Error ex.Message
 
 let updatePlatformConfig (filePath: string) (platform: string) (compiler: string) (std: string) : Result<unit, string> =

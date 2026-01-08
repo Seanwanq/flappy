@@ -48,7 +48,7 @@ let sync () =
     if not (File.Exists "flappy.toml") then Error "flappy.toml not found."
     else
         let content = File.ReadAllText "flappy.toml"
-        match Config.parse content with
+        match Config.parse content None with
         | Error e -> Error ("Failed to parse configuration: " + e)
         | Ok config ->
             Log.info "Syncing" ("[" + config.Package.Name + "]")
@@ -63,11 +63,11 @@ let sync () =
                 Log.info "Locked" (string lockEntries.Length + " dependencies")
                 Ok ()
 
-let build (profile: BuildProfile) = 
+let build (profile: BuildProfile) (targetProfile: string option) = 
     if not (File.Exists "flappy.toml") then Error "flappy.toml not found."
     else
         let content = File.ReadAllText "flappy.toml"
-        match Config.parse content with
+        match Config.parse content targetProfile with
         | Error e -> Error ("Failed to parse configuration: " + e)
         | Ok config ->
             if not (Directory.Exists "src") then Error "src directory not found."
@@ -163,14 +163,148 @@ let build (profile: BuildProfile) =
                                             for meta in depResults do for includePath in meta.IncludePaths do let pkgRoot = if includePath.EndsWith("include") || includePath.EndsWith("include" + string Path.DirectorySeparatorChar) then Path.GetDirectoryName(includePath) else includePath in let dlls = [ "*.dll"; "*.so"; "*.dylib" ] |> List.collect (fun ext -> if Directory.Exists pkgRoot then Directory.GetFiles(pkgRoot, ext, SearchOption.AllDirectories) |> Array.toList else []) in for dll in dlls do let dest = Path.Combine(outDir, Path.GetFileName(dll)) in if not (File.Exists(dest)) || FileInfo(dll).LastWriteTime > FileInfo(dest).LastWriteTime then Log.info "Copying" (Path.GetFileName(dll)); File.Copy(dll, dest, true)
                                         Ok ()
 
-let run (profile: BuildProfile) (extraArgs: string) =
-    match build profile with
+let run (profile: BuildProfile) (extraArgs: string) (targetProfile: string option) =
+    match build profile targetProfile with
     | Error e -> Error e
     | Ok () ->
         let content = File.ReadAllText "flappy.toml"
-        match Config.parse content with
+        match Config.parse content targetProfile with
         | Ok config ->
             let exePath = if Environment.OSVersion.Platform = PlatformID.Win32NT then (if config.Build.Type = "dll" || config.Build.Type = "shared" then "" elif not (config.Build.Output.EndsWith(".exe")) then config.Build.Output + ".exe" else config.Build.Output) else config.Build.Output
             if String.IsNullOrEmpty exePath || not (File.Exists exePath) then (if config.Build.Type = "exe" then Error ("Executable not found: " + exePath) else Log.info "Skipping" "Output is a library."; Ok ()) 
             else Log.info "Running" (exePath + " " + extraArgs); runCommand exePath extraArgs
+        | Error e -> Error e
+
+let buildTest (profile: BuildProfile) (targetProfile: string option) =
+    if not (File.Exists "flappy.toml") then Error "flappy.toml not found."
+    else
+        let content = File.ReadAllText "flappy.toml"
+        match Config.parse content targetProfile with
+        | Error e -> Error ("Failed to parse configuration: " + e)
+        | Ok config ->
+            match config.Test with
+            | None -> Error "No [test] section found in flappy.toml."
+            | Some testConfig ->
+                // 1. Resolve Sources
+                let resolveSource (pattern: string) =
+                    let dir = Path.GetDirectoryName(pattern)
+                    let searchPattern = Path.GetFileName(pattern)
+                    let searchDir = if String.IsNullOrEmpty(dir) then "." else dir
+                    if Directory.Exists searchDir then
+                        Directory.GetFiles(searchDir, searchPattern, SearchOption.AllDirectories) |> Array.toList
+                    else []
+                
+                let testSources = testConfig.Sources |> List.collect resolveSource
+                if testSources.IsEmpty then Error "No test source files found."
+                else
+                    // 2. Install Dependencies
+                    match installDependencies config.Dependencies profile with
+                    | Error e -> Error e
+                    | Ok depResults ->
+                        let mutable includePaths = depResults |> List.collect (fun m -> m.IncludePaths)
+                        if Directory.Exists "include" then includePaths <- Path.GetFullPath("include") :: includePaths
+                        
+                        let allDefines = config.Build.Defines @ testConfig.Defines @ (config.Dependencies |> List.collect (fun d -> d.Defines))
+                        
+                        // Output setup
+                        let outDir = Path.GetDirectoryName(testConfig.Output)
+                        if not (String.IsNullOrEmpty outDir) && not (Directory.Exists outDir) then Directory.CreateDirectory outDir |> ignore
+                        
+                        let profileStr = match profile with | Debug -> "debug" | Release -> "release"
+                        let objBaseDir = Path.Combine("obj", "test", config.Build.Arch, profileStr)
+                        if not (Directory.Exists objBaseDir) then Directory.CreateDirectory objBaseDir |> ignore
+                        
+                        let compiler = config.Build.Compiler
+                        let isMsvc = compiler.ToLower().Contains("cl") || compiler.ToLower() = "msvc" || compiler.ToLower().Contains("clang-cl")
+                        
+                        let profileFlags = 
+                            match profile with 
+                            | Debug -> if isMsvc then "/Zi /Od /MDd" else "-g -O0" 
+                            | Release -> if isMsvc then "/O2 /DNDEBUG /MD" else "-O3 -DNDEBUG"
+                            
+                        let archFlags = 
+                            if isMsvc then "" 
+                            else 
+                                match config.Build.Arch.ToLower() with 
+                                | "x86" -> "-m32" 
+                                | "x64" -> "-m64" 
+                                | _ -> ""
+                        
+                        let includeFlags = if isMsvc then includePaths |> List.map (fun p -> "/I\"" + p + "\"") |> String.concat " " else includePaths |> List.map (fun p -> "-I\"" + p + "\"") |> String.concat " "
+                        let defineFlags = if isMsvc then allDefines |> List.map (fun d -> "/D" + d) |> String.concat " " else allDefines |> List.map (fun d -> "-D" + d) |> String.concat " "
+                        let customFlags = config.Build.Flags |> String.concat " "
+
+                        // 3. Compile
+                        let compileFile (src: string) = async {
+                            let relPath = Path.GetRelativePath(".", src) // Use relative to root for tests
+                            let objExt = if isMsvc then ".obj" else ".o"
+                            let objPath = Path.Combine(objBaseDir, Path.GetFileName(src) + objExt) // Simple flat obj structure for now to avoid deep nesting issues
+                            
+                            let srcInfo = FileInfo(src)
+                            let objInfo = FileInfo(objPath)
+                            if not objInfo.Exists || srcInfo.LastWriteTime > objInfo.LastWriteTime then
+                                Log.info "Compiling" relPath
+                                let compileArgs = if isMsvc then let pdbPath = Path.Combine(objBaseDir, "vc.pdb") in "/c /nologo /FS /std:" + config.Build.Standard + " /EHsc " + profileFlags + " " + includeFlags + " " + defineFlags + " " + archFlags + " " + customFlags + " /Fo:\"" + objPath + "\" /Fd:\"" + pdbPath + "\" \"" + src + "\"" else "-c -std=" + config.Build.Standard + " " + profileFlags + " " + includeFlags + " " + defineFlags + " " + archFlags + " " + customFlags + " -o \"" + objPath + "\" \"" + src + "\""
+                                let finalCmd, finalArgs = match patchCommandForMsvc compiler compileArgs config.Build.Arch with | Some (c, a) -> (c, a) | None -> (compiler, compileArgs)
+                                let res = runCommand finalCmd finalArgs
+                                match res with | Error e -> return Some (objPath, e) | Ok () -> return None
+                            else return None }
+                        
+                        let results = testSources |> List.map compileFile |> Async.Parallel |> Async.RunSynchronously
+                        let failures = results |> Array.choose id
+                        if failures.Length > 0 then Error (snd failures.[0])
+                        else
+                            // 4. Link
+                            let objFiles = testSources |> List.map (fun src -> let objExt = if isMsvc then ".obj" else ".o" in Path.Combine(objBaseDir, Path.GetFileName(src) + objExt))
+                            
+                            let outputName = 
+                                if RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && not (testConfig.Output.EndsWith(".exe")) then testConfig.Output + ".exe" else testConfig.Output
+                                
+                            let allObjs = objFiles |> Seq.map (fun f -> "\"" + f + "\"") |> String.concat " "
+                            
+                            // Auto-link main project lib if applicable
+                            let projectLib = 
+                                let buildType = config.Build.Type.ToLower()
+                                if buildType = "lib" || buildType = "static" then
+                                    let libName = if isMsvc then config.Build.Output + ".lib" else config.Build.Output + ".a"
+                                    if File.Exists libName then Some libName else None
+                                else None
+                            
+                            let depLibs = 
+                                let libs = depResults |> List.collect (fun meta -> if not meta.Libs.IsEmpty then meta.Libs else let pkgRoot = (let inc = if meta.IncludePaths.IsEmpty then "." else meta.IncludePaths.[0] in if inc.EndsWith("include") || inc.EndsWith("include" + string Path.DirectorySeparatorChar) then Path.GetDirectoryName(inc) else inc) in let libExts = if isMsvc then [ "*.lib" ] else [ "*.a"; "*.so" ] in libExts |> List.collect (fun ext -> if Directory.Exists pkgRoot then Directory.GetFiles(pkgRoot, ext, SearchOption.AllDirectories) |> Array.toList else [])) 
+                                let all = match projectLib with | Some l -> l :: libs | None -> libs
+                                all |> List.distinct |> List.map (fun l -> "\"" + l + "\"") |> String.concat " "
+
+                            let extraLinkFlags = if isMsvc then (match profile with Debug -> "/DEBUG" | Release -> "") else ""
+                            let linkCmd, linkArgs = 
+                                if isMsvc then 
+                                    compiler, "/Fe:\"" + outputName + "\" " + allObjs + " " + depLibs + " " + extraLinkFlags + " " + customFlags + " /link /PDB:\"" + outputName + ".pdb\""
+                                else 
+                                    compiler, allObjs + " " + depLibs + " " + customFlags + " " + archFlags + " -o \"" + outputName + "\""
+
+                            Log.info "Linking" outputName
+                            let finalLinkCmd, finalLinkArgs = match patchCommandForMsvc linkCmd linkArgs config.Build.Arch with | Some (c, a) -> (c, a) | None -> (linkCmd, linkArgs)
+                            match runCommand finalLinkCmd finalLinkArgs with
+                            | Error e -> Error e
+                            | Ok () ->
+                                // Copy DLLs
+                                let outDir = if String.IsNullOrEmpty(Path.GetDirectoryName(outputName)) then "." else Path.GetDirectoryName(outputName)
+                                for meta in depResults do for includePath in meta.IncludePaths do let pkgRoot = if includePath.EndsWith("include") || includePath.EndsWith("include" + string Path.DirectorySeparatorChar) then Path.GetDirectoryName(includePath) else includePath in let dlls = [ "*.dll"; "*.so"; "*.dylib" ] |> List.collect (fun ext -> if Directory.Exists pkgRoot then Directory.GetFiles(pkgRoot, ext, SearchOption.AllDirectories) |> Array.toList else []) in for dll in dlls do let dest = Path.Combine(outDir, Path.GetFileName(dll)) in if not (File.Exists(dest)) || FileInfo(dll).LastWriteTime > FileInfo(dest).LastWriteTime then Log.info "Copying" (Path.GetFileName(dll)); File.Copy(dll, dest, true)
+                                Ok ()
+
+let runTest (profile: BuildProfile) (extraArgs: string) (targetProfile: string option) =
+    match buildTest profile targetProfile with
+    | Error e -> Error e
+    | Ok () ->
+        let content = File.ReadAllText "flappy.toml"
+        match Config.parse content targetProfile with
+        | Ok config ->
+            match config.Test with
+            | Some testConfig ->
+                let exePath = if RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && not (testConfig.Output.EndsWith(".exe")) then testConfig.Output + ".exe" else testConfig.Output
+                if File.Exists exePath then
+                    Log.info "Running" (exePath + " " + extraArgs)
+                    runCommand exePath extraArgs
+                else Error ("Test executable not found: " + exePath)
+            | None -> Error "No [test] configuration."
         | Error e -> Error e

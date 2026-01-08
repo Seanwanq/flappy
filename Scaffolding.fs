@@ -2,6 +2,7 @@ module Flappy.Scaffolding
 
 open System
 open System.IO
+open System.Runtime.InteropServices
 open Flappy.Config
 
 type InitOptions = {
@@ -14,18 +15,26 @@ type InitOptions = {
 }
 
 let defaultToml (options: InitOptions) = 
+    let platform = 
+        if RuntimeInformation.IsOSPlatform(OSPlatform.Windows) then "windows"
+        elif RuntimeInformation.IsOSPlatform(OSPlatform.Linux) then "linux"
+        elif RuntimeInformation.IsOSPlatform(OSPlatform.OSX) then "macos"
+        else "unknown"
+        
     $"""[package]
 name = "{options.Name}"
 version = "0.1.0"
 authors = ["Your Name"]
 
 [build]
-compiler = "{options.Compiler}"
 language = "{options.Language}"
 standard = "{options.Standard}"
-arch = "{options.Arch}"
-type = "{options.Type}"
 output = "bin/{options.Name}"
+type = "{options.Type}"
+
+[build.{platform}]
+compiler = "{options.Compiler}"
+arch = "{options.Arch}"
 """
 
 let defaultMainCpp = """#include <iostream>
