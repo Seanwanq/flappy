@@ -81,10 +81,14 @@ let runInteractiveInit (nameArg: string option) : InitOptions option =
                     | None -> None
                     | Some arch ->
                         // 6. Type
-                        let types = ["exe"; "dll"]
-                        match select "Select Project Type:" types 0 with
+                        let typeOptions = ["Executable (exe)"; "Static Library (lib)"; "Dynamic Library (dll)"]
+                        match select "Select Project Type:" typeOptions 0 with
                         | None -> None
-                        | Some type' ->
+                        | Some typeSelection ->
+                            let type' = 
+                                if typeSelection.Contains("(exe)") then "exe"
+                                elif typeSelection.Contains("(lib)") then "lib"
+                                else "dll"
                             Some { Name = name; Compiler = compiler; Language = lang; Standard = std; Arch = arch; Type = type' }
 
     askSteps()
@@ -159,7 +163,7 @@ let main args =
         | Ok () -> 
             sw.Stop()
             let profileName = if profile = Release then "release" else "dev"
-            Log.info "Finished" ($"{profileName} target(s) in {sw.Elapsed.TotalSeconds:F2}s")
+            Log.info "Finished" $"{profileName} target(s) in {sw.Elapsed.TotalSeconds:F2}s"
             0
         | Error e -> 
             Console.Error.WriteLine($"Build failed: {e}")
@@ -171,8 +175,11 @@ let main args =
             match tail |> List.tryFindIndex (fun x -> x = "--") with
             | Some idx -> tail |> List.skip (idx + 1) |> String.concat " "
             | None -> ""
+        let sw = Diagnostics.Stopwatch.StartNew()
         match run profile extraArgs with
-        | Ok () -> 0
+        | Ok () -> 
+            sw.Stop()
+            0
         | Error e ->
             Console.Error.WriteLine($"Run failed: {e}")
             1
@@ -235,7 +242,7 @@ let main args =
         let tag = args.TryFind "tag"
         let defines = 
             match args.TryFind "defines" with
-            | Some d -> d.Split(',') |> Array.map (fun x -> "\"" + x.Trim() + "\"") |> String.concat ", "
+            | Some d -> d.Split(',') |> Array.map (fun x -> """ + x.Trim() + """) |> String.concat ", "
             | None -> ""
         
         let definesPart = if defines = "" then "" else $", defines = [{defines}]"
