@@ -51,36 +51,41 @@ let runInteractiveInit (nameArg: string option) : InitOptions option =
 
     // Helper to chain selections
     let rec askSteps () = 
-        // 2. Compiler
-        let toolchains = getAvailableToolchains()
-        let compilerResult = 
-            if toolchains.IsEmpty then
-                Console.Write("Compiler (e.g. g++): ")
-                let input = Console.ReadLine()
-                Some (if String.IsNullOrWhiteSpace(input) then "g++" else input.Trim())
-            else
-                let opts = toolchains |> List.map (fun t -> t.Command)
-                select "Select Compiler:" opts 0
-        
-        match compilerResult with
+        // 2. Language
+        let langs = ["c++"; "c"]
+        match select "Select Project Language:" langs 0 with
         | None -> None
-        | Some compiler ->
-            // 3. Standard
-            let standards = ["c++17"; "c++20"; "c++23"; "c++14"; "c++11"]
-            match select "Select C++ Standard:" standards 0 with
+        | Some lang ->
+            // 3. Compiler
+            let toolchains = getAvailableToolchains()
+            let compilerResult = 
+                if toolchains.IsEmpty then
+                    Console.Write("Compiler (e.g. g++): ")
+                    let input = Console.ReadLine()
+                    Some (if String.IsNullOrWhiteSpace(input) then "g++" else input.Trim())
+                else
+                    let opts = toolchains |> List.map (fun t -> t.Command)
+                    select "Select Compiler:" opts 0
+            
+            match compilerResult with
             | None -> None
-            | Some std ->
-                // 4. Arch
-                let archs = ["x64"; "x86"; "arm64"]
-                match select "Select Architecture:" archs 0 with
+            | Some compiler ->
+                // 4. Standard
+                let standards = if lang = "c" then ["c11"; "c17"; "c99"; "c89"] else ["c++17"; "c++20"; "c++23"; "c++14"; "c++11"]
+                match select "Select Standard:" standards 0 with
                 | None -> None
-                | Some arch ->
-                    // 5. Type
-                    let types = ["exe"; "dll"]
-                    match select "Select Project Type:" types 0 with
+                | Some std ->
+                    // 5. Arch
+                    let archs = ["x64"; "x86"; "arm64"]
+                    match select "Select Architecture:" archs 0 with
                     | None -> None
-                    | Some type' ->
-                        Some { Name = name; Compiler = compiler; Standard = std; Arch = arch; Type = type' }
+                    | Some arch ->
+                        // 6. Type
+                        let types = ["exe"; "dll"]
+                        match select "Select Project Type:" types 0 with
+                        | None -> None
+                        | Some type' ->
+                            Some { Name = name; Compiler = compiler; Language = lang; Standard = std; Arch = arch; Type = type' }
 
     askSteps()
 
@@ -90,6 +95,8 @@ let parseInitArgs (args: string list) =
         | [] -> opts
         | "-c" :: val' :: tail | "--compiler" :: val' :: tail ->
             parse (opts.Add("compiler", val')) tail
+        | "-l" :: val' :: tail | "--language" :: val' :: tail ->
+            parse (opts.Add("language", val')) tail
         | "-s" :: val' :: tail | "--std" :: val' :: tail ->
             parse (opts.Add("std", val')) tail
         | "--git" :: val' :: tail -> parse (opts.Add("git", val')) tail
@@ -127,9 +134,11 @@ let main args =
                 match userOpts.TryFind "compiler" with
                 | Some c -> c
                 | None -> getOrSetupCompiler()
-            let standard = userOpts.TryFind "std" |> Option.defaultValue "c++17"
+            let language = userOpts.TryFind "language" |> Option.defaultValue "c++"
+            let defaultStd = if language = "c" then "c11" else "c++17"
+            let standard = userOpts.TryFind "std" |> Option.defaultValue defaultStd
             
-            let options = { Name = name; Compiler = compiler; Standard = standard; Arch = "x64"; Type = "exe" }
+            let options = { Name = name; Compiler = compiler; Language = language; Standard = standard; Arch = "x64"; Type = "exe" }
             initProject options
         else
             // Interactive mode

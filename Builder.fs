@@ -84,11 +84,6 @@ let sync () =
                 Log.info "Locked" $"{lockEntries.Length} dependencies"
                 Ok ()
 
-let getSources (dir: string) = 
-    let extensions = [ "*.cpp"; "*.c"; "*.cc"; "*.cxx" ]
-    extensions 
-    |> List.collect (fun ext -> Directory.GetFiles(dir, ext, SearchOption.AllDirectories) |> Array.toList)
-
 let build (profile: BuildProfile) = 
     if not (File.Exists "flappy.toml") then
         Error "flappy.toml not found. Are you in a flappy project?"
@@ -100,7 +95,10 @@ let build (profile: BuildProfile) =
             if not (Directory.Exists "src") then
                 Error "src directory not found."
             else
-                let sources = getSources "src"
+                let lang = config.Build.Language.ToLower()
+                let extensions = if lang = "c" then ["*.c"] else ["*.cpp"; "*.cc"; "*.cxx"; "*.c"]
+                let sources = extensions |> List.collect (fun ext -> Directory.GetFiles("src", ext, SearchOption.AllDirectories) |> Array.toList)
+                
                 if sources.IsEmpty then
                     Error "No source files found in src/."
                 else

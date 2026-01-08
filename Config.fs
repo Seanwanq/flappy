@@ -12,14 +12,29 @@ type PackageConfig =
       Version: string
       Authors: string list }
 
-type BuildConfig = 
-    { Compiler: string
-      Standard: string
-      Output: string
-      Arch: string
-      Type: string
-      Defines: string list
-      Flags: string list }
+type BuildConfig =
+
+    {
+
+        Compiler: string
+
+        Language: string
+
+        Standard: string
+
+        Output: string
+
+        Arch: string
+
+        Type: string
+
+        Defines: string list
+
+        Flags: string list
+
+    }
+
+
 
 type DependencySource = 
     | Git of url: string * tag: string option
@@ -76,47 +91,83 @@ module Log =
 type BuildProfile = Debug | Release
 
 let defaultConfig =
-    { Package = { Name = "untitled"; Version = "0.1.0"; Authors = [] }
-      Build = { Compiler = "g++"; Standard = "c++17"; Output = "main"; Arch = "x64"; Type = "exe"; Defines = []; Flags = [] }
-      Dependencies = [] }
+    {
+        Package =
+            {
+                Name = "untitled"
+                Version = "0.1.0"
+                Authors = []
+            }
+        Build =
+            {
+                Compiler = "g++"
+                Language = "c++"
+                Standard = "c++17"
+                Output = "main"
+                Arch = "x64"
+                Type = "exe"
+                Defines = []
+                Flags = []
+            }
+        Dependencies = []
+    }
 
 let parse (tomlContent: string) : Result<FlappyConfig, string> =
     try
         let model = Toml.ToModel tomlContent
 
         let getTable (key: string) (m: TomlTable) =
-            if m.ContainsKey(key) && m.[key] :? TomlTable then Some(m.[key] :?> TomlTable) else None
+            if m.ContainsKey(key) && m.[key] :? TomlTable then
+                Some(m.[key] :?> TomlTable)
+            else
+                None
 
         let getString (key: string) (m: TomlTable) (def: string) =
-            if m.ContainsKey(key) && m.[key] :? string then m.[key] :?> string else def
-        
+            if m.ContainsKey(key) && m.[key] :? string then
+                m.[key] :?> string
+            else
+                def
+
         let getOptString (key: string) (m: TomlTable) =
-            if m.ContainsKey key && m.[key] :? string then Some(m.[key] :?> string) else None
+            if m.ContainsKey key && m.[key] :? string then
+                Some(m.[key] :?> string)
+            else
+                None
 
         let getList (key: string) (m: TomlTable) =
-            if m.ContainsKey key && m.[key] :? TomlArray then 
+            if m.ContainsKey key && m.[key] :? TomlArray then
                 (m.[key] :?> TomlArray) |> Seq.cast<obj> |> Seq.map string |> Seq.toList
-            else []
+            else
+                []
 
         let packageConfig =
             match getTable "package" model with
             | Some pkg ->
-                { Name = getString "name" pkg defaultConfig.Package.Name
-                  Version = getString "version" pkg defaultConfig.Package.Version
-                  Authors = getList "authors" pkg }
+                {
+                    Name = getString "name" pkg defaultConfig.Package.Name
+                    Version = getString "version" pkg defaultConfig.Package.Version
+                    Authors = getList "authors" pkg
+                }
             | None -> defaultConfig.Package
 
         let buildConfig =
             match getTable "build" model with
             | Some build ->
-                { Compiler = getString "compiler" build defaultConfig.Build.Compiler
-                  Standard = getString "standard" build defaultConfig.Build.Standard
-                  Output = getString "output" build defaultConfig.Build.Output
-                  Arch = getString "arch" build defaultConfig.Build.Arch
-                  Type = getString "type" build defaultConfig.Build.Type
-                  Defines = getList "defines" build
-                  Flags = getList "flags" build }
-            | None -> { defaultConfig.Build with Defines = []; Flags = [] }
+                {
+                    Compiler = getString "compiler" build defaultConfig.Build.Compiler
+                    Language = getString "language" build defaultConfig.Build.Language
+                    Standard = getString "standard" build defaultConfig.Build.Standard
+                    Output = getString "output" build defaultConfig.Build.Output
+                    Arch = getString "arch" build defaultConfig.Build.Arch
+                    Type = getString "type" build defaultConfig.Build.Type
+                    Defines = getList "defines" build
+                    Flags = getList "flags" build
+                }
+            | None ->
+                { defaultConfig.Build with
+                    Defines = []
+                    Flags = []
+                }
 
         let dependencies =
             match getTable "dependencies" model with

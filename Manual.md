@@ -30,7 +30,8 @@ version = "0.1.0"
 
 [build]
 compiler = "cl"          # Supports cl (MSVC), g++, clang++
-standard = "c++17"       # c++11, 14, 17, 20, 23
+language = "c++"         # Supports c++, c
+standard = "c++17"       # c++11, 14, 17, 20, 23 (or c89, c99, c11, c17)
 arch = "x64"             # x64, x86, arm64
 type = "exe"             # exe, dll (dynamic), lib (static)
 output = "bin/my_app"    # Output binary path
