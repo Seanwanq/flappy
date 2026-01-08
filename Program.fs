@@ -2,6 +2,7 @@ module Flappy.Program
 
 open System
 open System.IO
+open System.Runtime.InteropServices
 open Flappy.Config
 open Flappy.Scaffolding
 open Flappy.Builder
@@ -40,8 +41,7 @@ let getOrSetupCompiler () =
 let runInteractiveInit (nameArg: string option) : InitOptions option =
     Console.WriteLine("Initializing new Flappy project...")
     
-    // 1. Name
-    let name = 
+    let name =
         match nameArg with
         | Some n -> n
         | None -> 
@@ -49,16 +49,13 @@ let runInteractiveInit (nameArg: string option) : InitOptions option =
             let input = Console.ReadLine()
             if String.IsNullOrWhiteSpace(input) then "untitled" else input.Trim()
 
-    // Helper to chain selections
-    let rec askSteps () = 
-        // 2. Language
+    let rec askSteps () =
         let langs = ["c++"; "c"]
         match select "Select Project Language:" langs 0 with
         | None -> None
         | Some lang ->
-            // 3. Compiler
             let toolchains = getAvailableToolchains()
-            let compilerResult = 
+            let compilerResult =
                 if toolchains.IsEmpty then
                     Console.Write("Compiler (e.g. g++): ")
                     let input = Console.ReadLine()
@@ -70,28 +67,80 @@ let runInteractiveInit (nameArg: string option) : InitOptions option =
             match compilerResult with
             | None -> None
             | Some compiler ->
-                // 4. Standard
                 let standards = if lang = "c" then ["c11"; "c17"; "c99"; "c89"] else ["c++17"; "c++20"; "c++23"; "c++14"; "c++11"]
                 match select "Select Standard:" standards 0 with
                 | None -> None
                 | Some std ->
-                    // 5. Arch
                     let archs = ["x64"; "x86"; "arm64"]
                     match select "Select Architecture:" archs 0 with
                     | None -> None
                     | Some arch ->
-                        // 6. Type
                         let typeOptions = ["Executable (exe)"; "Static Library (lib)"; "Dynamic Library (dll)"]
                         match select "Select Project Type:" typeOptions 0 with
                         | None -> None
                         | Some typeSelection ->
-                            let type' = 
+                            let type' =
                                 if typeSelection.Contains("(exe)") then "exe"
                                 elif typeSelection.Contains("(lib)") then "lib"
                                 else "dll"
                             Some { Name = name; Compiler = compiler; Language = lang; Standard = std; Arch = arch; Type = type' }
 
     askSteps()
+
+let runXPlatWizard () =
+    if not (File.Exists "flappy.toml") then
+        Log.error "Error" "No flappy.toml found in current directory."
+        1
+    else
+        Log.info "XPlat" "Configuring cross-platform build targets..."
+        let platforms = ["windows"; "linux"; "macos"]
+        match select "Select target platform to configure:" platforms 0 with
+        | None -> 0
+        | Some platform ->
+            let currentPlatform =
+                if RuntimeInformation.IsOSPlatform(OSPlatform.Windows) then "windows"
+                elif RuntimeInformation.IsOSPlatform(OSPlatform.Linux) then "linux"
+                elif RuntimeInformation.IsOSPlatform(OSPlatform.OSX) then "macos"
+                else "unknown"
+            
+            let compilerResult =
+                if platform = currentPlatform then
+                    let toolchains = getAvailableToolchains()
+                    if toolchains.IsEmpty then
+                        Console.Write($"No compilers found. Enter command for {platform}: ")
+                        Some (Console.ReadLine().Trim())
+                    else
+                        let opts = toolchains |> List.map (fun t -> t.Command)
+                        select $"Select compiler for {platform}:" opts 0
+                else
+                    let suggestions =
+                        match platform with 
+                        | "windows" -> ["cl"; "clang-cl"; "g++"]
+                        | "linux" -> ["g++"; "clang++"]
+                        | "macos" -> ["clang++"; "g++"]
+                        | _ -> []
+                    let opts = suggestions @ ["(Enter custom command)"]
+                    match select $"Choose a compiler for {platform}:" opts 0 with
+                    | None -> None
+                    | Some choice when choice.Contains("custom") ->
+                        Console.Write($"Enter compiler command for {platform}: ")
+                        Some (Console.ReadLine().Trim())
+                    | Some choice -> Some choice
+            
+            match compilerResult with
+            | None -> 0
+            | Some compiler ->
+                let standards = ["c++17"; "c++20"; "c++23"; "c++14"; "c++11"; "c11"; "c17"; "c99"]
+                match select $"Select standard for {platform}:" standards 0 with
+                | None -> 0
+                | Some std ->
+                    match Config.updatePlatformConfig "flappy.toml" platform compiler std with
+                    | Ok () -> 
+                        Log.info "Success" $"Updated flappy.toml with {platform} configuration."
+                        0
+                    | Error e -> 
+                        Log.error "Failed" $"Failed to update config: {e}"
+                        1
 
 let parseInitArgs (args: string list) =
     let rec parse (opts: Map<string, string>) (rest: string list) =
@@ -108,14 +157,12 @@ let parseInitArgs (args: string list) =
         | "--path" :: val' :: tail -> parse (opts.Add("path", val')) tail
         | "--tag" :: val' :: tail -> parse (opts.Add("tag", val')) tail
         | "-D" :: val' :: tail | "--define" :: val' :: tail ->
-            // Support multiple defines by appending with a separator
             let current = opts.TryFind "defines" |> Option.defaultValue ""
             let next = if current = "" then val' else current + "," + val'
             parse (opts.Add("defines", next)) tail
         | head :: tail ->
             Console.WriteLine($"Warning: Unknown argument '{head}' ignored.")
             parse opts tail
-            
     parse Map.empty args
 
 [<EntryPoint>]
@@ -125,37 +172,26 @@ let main args =
     | "init" :: tail ->
         let isFlag (s: string) = s.StartsWith("-")
         let hasFlags = tail |> List.exists isFlag
-        
         if hasFlags then
-            // Legacy/Flag mode
-            let name, argsToParse = 
+            let name, argsToParse =
                 match tail with
                 | n :: rest when not (isFlag n) -> n, rest
                 | _ -> "untitled", tail
-            
             let userOpts = parseInitArgs argsToParse
-            let compiler = 
+            let compiler =
                 match userOpts.TryFind "compiler" with
                 | Some c -> c
                 | None -> getOrSetupCompiler()
             let language = userOpts.TryFind "language" |> Option.defaultValue "c++"
             let defaultStd = if language = "c" then "c11" else "c++17"
             let standard = userOpts.TryFind "std" |> Option.defaultValue defaultStd
-            
-            let options = { Name = name; Compiler = compiler; Language = language; Standard = standard; Arch = "x64"; Type = "exe" }
-            initProject options
+            initProject { Name = name; Compiler = compiler; Language = language; Standard = standard; Arch = "x64"; Type = "exe" }
         else
-            // Interactive mode
-            let nameArg = 
-                match tail with
-                | n :: _ -> Some n
-                | [] -> None
-            
+            let nameArg = match tail with | n :: _ -> Some n | [] -> None
             match runInteractiveInit nameArg with
             | Some options -> initProject options
             | None -> Console.WriteLine("Initialization cancelled.")
         0
-        
     | "build" :: tail ->
         let profile = if List.contains "--release" tail then Release else Debug
         let sw = Diagnostics.Stopwatch.StartNew()
@@ -168,22 +204,20 @@ let main args =
         | Error e -> 
             Console.Error.WriteLine($"Build failed: {e}")
             1
-            
     | "run" :: tail ->
         let profile = if List.contains "--release" tail then Release else Debug
-        let extraArgs = 
+        let extraArgs =
             match tail |> List.tryFindIndex (fun x -> x = "--") with
             | Some idx -> tail |> List.skip (idx + 1) |> String.concat " "
             | None -> ""
         let sw = Diagnostics.Stopwatch.StartNew()
         match run profile extraArgs with
-        | Ok () -> 
-            sw.Stop()
-            0
+        | Ok () -> sw.Stop(); 0
         | Error e ->
             Console.Error.WriteLine($"Run failed: {e}")
             1
-
+    | ["xplat"] ->
+        runXPlatWizard ()
     | ["clean"] ->
         if not (File.Exists "flappy.toml") then
             Console.Error.WriteLine("flappy.toml not found.")
@@ -197,27 +231,17 @@ let main args =
             | Ok config ->
                 let outDir = Path.GetDirectoryName(config.Build.Output)
                 if not (String.IsNullOrEmpty outDir) && Directory.Exists outDir then
-                    try 
-                        Directory.Delete(outDir, true)
-                        Console.WriteLine($"Cleaned {outDir}")
-                    with _ -> ()
-                
+                    try Directory.Delete(outDir, true); Console.WriteLine($"Cleaned {outDir}") with _ -> ()
                 if Directory.Exists "obj" then
-                    try 
-                        Directory.Delete("obj", true)
-                        Console.WriteLine("Cleaned obj/")
-                    with _ -> ()
-                
+                    try Directory.Delete("obj", true); Console.WriteLine("Cleaned obj/") with _ -> ()
                 Console.WriteLine("Cleanup complete.")
                 0
-
     | ["sync"] ->
         match sync() with
         | Ok () -> 0
         | Error e ->
             Console.Error.WriteLine($"Sync failed: {e}")
             1
-
     | "cache" :: subArgs ->
         match subArgs with
         | ["clean"] ->
@@ -231,29 +255,23 @@ let main args =
             Console.WriteLine("Commands:")
             Console.WriteLine("  clean         Clear the global dependency cache")
             1
-
     | "add" :: name :: rest ->
-        // Simple manual parsing for add command
         let args = parseInitArgs rest 
-        
         let git = args.TryFind "git"
         let url = args.TryFind "url"
         let path = args.TryFind "path"
         let tag = args.TryFind "tag"
-        let defines = 
+        let defines =
             match args.TryFind "defines" with
             | Some d -> d.Split(',') |> Array.map (fun x -> """ + x.Trim() + """) |> String.concat ", "
             | None -> ""
-        
         let definesPart = if defines = "" then "" else $", defines = [{defines}]"
-        
-        // Validation: exactly one source
         let sources = [git; url; path] |> List.choose id
         if sources.Length <> 1 then
             Console.Error.WriteLine("Error: Please specify exactly one source: --git <url>, --url <url>, or --path <path>")
             1
         else
-            let tomlLine = 
+            let tomlLine =
                 match git with
                 | Some g -> 
                     match tag with
@@ -266,47 +284,44 @@ let main args =
                         match path with
                         | Some p -> $"{name} = {{ path = \"{p}\"{definesPart} }}"
                         | None -> "" 
-            
             match Config.addDependency "flappy.toml" name tomlLine with
             | Ok () ->
-                Log.info "Added" ("dependency '" + name + "' to flappy.toml.")
+                Log.info "Added" $"dependency '{name}' to flappy.toml."
                 match sync() with
                 | Ok () -> 
                     Log.info "Success" "Dependency installed and locked."
                     0
                 | Error e -> 
-                    Log.error "Failed" ("Sync failed: " + e)
-                    Log.warn "Rollback" ("Removing '" + name + "' from flappy.toml due to failure.")
+                    Log.error "Failed" $"Sync failed: {e}"
+                    Log.warn "Rollback" $"Removing '{name}' from flappy.toml due to failure."
                     Config.removeDependency "flappy.toml" name |> ignore
                     1
             | Error e ->
-                Log.error "Error" ("Failed to add dependency: " + e)
+                Log.error "Error" $"Failed to add dependency: {e}"
                 1
-
     | "remove" :: [name] | "rm" :: [name] ->
         match Config.removeDependency "flappy.toml" name with
         | Ok () ->
             Console.WriteLine($"Removed dependency '{name}' from flappy.toml.")
             match sync() with
             | Ok () -> 
-                // Cleanup the linked directory in packages/
                 let pkgDir = Path.Combine("packages", name)
                 if Directory.Exists(pkgDir) then
                     try Directory.Delete(pkgDir, true) with _ -> ()
                 0
             | Error e -> 
-                Console.Error.WriteLine($"Dependency removed from toml, but sync failed: {e}")
+                Console.Error.WriteLine($"Sync failed: {e}")
                 1
         | Error e ->
             Console.Error.WriteLine($"Failed to remove dependency: {e}")
             1
-
     | _ ->
         Console.WriteLine("Usage: flappy <command> [options]")
         Console.WriteLine("Commands:")
         Console.WriteLine("  init [name]           Start interactive setup")
         Console.WriteLine("  init <name> [flags]   Quick setup with flags")
         Console.WriteLine("    --compiler, -c <cmd>")
+        Console.WriteLine("    --language, -l <c|c++>")
         Console.WriteLine("    --std, -s <ver>")
         Console.WriteLine("  add <name> [flags]    Add a dependency")
         Console.WriteLine("    --git <url> [--tag <tag>]")
@@ -317,6 +332,7 @@ let main args =
         Console.WriteLine("  sync                  Install dependencies and update flappy.lock")
         Console.WriteLine("  build [--release]     Build the project")
         Console.WriteLine("  run [--release]       Build and run the project")
+        Console.WriteLine("  xplat                 Configure toolchains for other platforms")
         Console.WriteLine("  clean                 Remove build artifacts (bin/ and obj/)")
         Console.WriteLine("  cache clean           Clear the global dependency cache")
         1

@@ -38,6 +38,24 @@ output = "bin/my_app"    # Output binary path
 defines = ["DEBUG_MODE"] # Global macro definitions
 flags = ["/W4"]          # Custom compiler flags
 
+### 2.1 Cross-Platform Overrides
+You can provide platform-specific overrides for any field in the `[build]` section:
+
+```toml
+[build]
+standard = "c++20"
+
+[build.windows]
+compiler = "cl"
+flags = ["/W4"]
+
+[build.linux]
+compiler = "g++"
+flags = ["-Wall", "-pthread"]
+```
+
+Flappy automatically detects your OS and merges the corresponding section.
+
 [dependencies]
 # 1. Local Flappy or CMake projects (supports automatic recursive builds)
 my_lib = { path = "../my_lib" }

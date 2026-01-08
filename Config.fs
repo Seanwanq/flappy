@@ -3,6 +3,7 @@ module Flappy.Config
 open System
 open System.IO
 open System.Diagnostics
+open System.Runtime.InteropServices
 open System.Text.RegularExpressions
 open Tomlyn
 open Tomlyn.Model
@@ -153,21 +154,37 @@ let parse (tomlContent: string) : Result<FlappyConfig, string> =
         let buildConfig =
             match getTable "build" model with
             | Some build ->
-                {
-                    Compiler = getString "compiler" build defaultConfig.Build.Compiler
-                    Language = getString "language" build defaultConfig.Build.Language
-                    Standard = getString "standard" build defaultConfig.Build.Standard
-                    Output = getString "output" build defaultConfig.Build.Output
-                    Arch = getString "arch" build defaultConfig.Build.Arch
-                    Type = getString "type" build defaultConfig.Build.Type
-                    Defines = getList "defines" build
-                    Flags = getList "flags" build
-                }
-            | None ->
-                { defaultConfig.Build with
-                    Defines = []
-                    Flags = []
-                }
+                // 1. Get base values
+                let baseCompiler = getString "compiler" build defaultConfig.Build.Compiler
+                let baseLanguage = getString "language" build defaultConfig.Build.Language
+                let baseStandard = getString "standard" build defaultConfig.Build.Standard
+                let baseOutput = getString "output" build defaultConfig.Build.Output
+                let baseArch = getString "arch" build defaultConfig.Build.Arch
+                let baseType = getString "type" build defaultConfig.Build.Type
+                let baseDefines = getList "defines" build
+                let baseFlags = getList "flags" build
+
+                // 2. Identify current platform
+                let platformKey = 
+                    if RuntimeInformation.IsOSPlatform(OSPlatform.Windows) then "windows"
+                    elif RuntimeInformation.IsOSPlatform(OSPlatform.Linux) then "linux"
+                    elif RuntimeInformation.IsOSPlatform(OSPlatform.OSX) then "macos"
+                    else "unknown"
+
+                // 3. Apply overrides if platform table exists
+                match getTable platformKey build with
+                | Some overrides ->
+                    { Compiler = getString "compiler" overrides baseCompiler
+                      Language = getString "language" overrides baseLanguage
+                      Standard = getString "standard" overrides baseStandard
+                      Output = getString "output" overrides baseOutput
+                      Arch = getString "arch" overrides baseArch
+                      Type = getString "type" overrides baseType
+                      Defines = baseDefines @ (getList "defines" overrides)
+                      Flags = baseFlags @ (getList "flags" overrides) }
+                | None ->
+                    { Compiler = baseCompiler; Language = baseLanguage; Standard = baseStandard; Output = baseOutput; Arch = baseArch; Type = baseType; Defines = baseDefines; Flags = baseFlags }
+            | None -> { defaultConfig.Build with Defines = []; Flags = [] }
 
         let dependencies =
             match getTable "dependencies" model with
@@ -196,6 +213,39 @@ let parse (tomlContent: string) : Result<FlappyConfig, string> =
             | None -> []
 
         Ok { Package = packageConfig; Build = buildConfig; Dependencies = dependencies }
+    with ex -> Error ex.Message
+
+let updatePlatformConfig (filePath: string) (platform: string) (compiler: string) (std: string) : Result<unit, string> =
+    try
+        if not (File.Exists filePath) then Error "flappy.toml not found."
+        else
+            let content = File.ReadAllText filePath
+            let model = Toml.ToModel content
+            
+            // Get or create the build table
+            let buildTable = 
+                if model.ContainsKey("build") && model.["build"] :? TomlTable then
+                    model.["build"] :?> TomlTable
+                else
+                    let t = TomlTable()
+                    model.["build"] <- t
+                    t
+            
+            // Get or create the platform sub-table
+            let platformTable = 
+                if buildTable.ContainsKey(platform) && buildTable.[platform] :? TomlTable then
+                    buildTable.[platform] :?> TomlTable
+                else
+                    let t = TomlTable()
+                    buildTable.[platform] <- t
+                    t
+            
+            platformTable.["compiler"] <- compiler
+            platformTable.["standard"] <- std
+            
+            let newContent = Toml.FromModel(model)
+            File.WriteAllText(filePath, newContent)
+            Ok ()
     with ex -> Error ex.Message
 
 let parseLock (tomlContent: string) : LockConfig =
