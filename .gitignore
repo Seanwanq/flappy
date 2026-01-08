@@ -12,6 +12,18 @@ GEMINI.md
 .local/
 test_setup/
 demo_real_msvc/
+test_*/
+*_demo/
+packages/
+*.pdb
+*.obj
+*.o
+*.lib
+*.a
+*.dll
+*.so
+*.dylib
+*.exp
 
 # OS/VS
 .vs/

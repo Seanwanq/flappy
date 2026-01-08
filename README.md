@@ -2,6 +2,8 @@
 
 Flappy is a modern, lightweight, and fast C/C++ package manager and build tool written in F#. It provides a **Cargo-like experience** for C++ developers, replacing complex CMake or Makefile configurations with a simple, human-readable `flappy.toml`.
 
+👉 **[View Full User Manual (Manual.md)](Manual.md)**
+
 ## ✨ Features
 
 -   **Zero-Config Build**: Automatically detects MSVC, GCC, and Clang.

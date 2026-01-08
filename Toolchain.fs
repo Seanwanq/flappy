@@ -3,7 +3,7 @@ module Flappy.Toolchain
 open System
 open System.Diagnostics
 open System.IO
-open Flappy.VsDevCmd
+open Flappy.Config
 
 type CompilerType =
     | MSVC
