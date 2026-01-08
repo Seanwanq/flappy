@@ -37,3 +37,5 @@ config.toml
 
 test_interactive_self/
 .fake
+test_*/
+*_demo/
