@@ -245,6 +245,15 @@ let parse (tomlContent: string) (profileOverride: string option) : Result<Flappy
         Ok { Package = packageConfig; Build = buildConfig; Test = testConfig; Dependencies = dependencies }
     with ex -> Error ex.Message
 
+let formatToml (content: string) =
+    // Ensure exactly one blank line before any section header [section]
+    // 1. Normalize all line endings to LF and collapse multiple empty lines
+    let normalized = content.Replace("\r\n", "\n")
+    let collapsed = Regex.Replace(normalized, @"\n{2,}", "\n")
+    // 2. Insert a blank line before every section header except the first one
+    let formatted = Regex.Replace(collapsed, @"\n(\[)", "\n\n$1")
+    formatted.Trim() + "\n"
+
 let updatePlatformConfig (filePath: string) (platform: string) (compiler: string) (std: string) : Result<unit, string> =
     try
         if not (File.Exists filePath) then Error "flappy.toml not found."
@@ -274,8 +283,7 @@ let updatePlatformConfig (filePath: string) (platform: string) (compiler: string
             platformTable.["standard"] <- std
             
             let newContent = Toml.FromModel(model)
-            let prettyContent = Regex.Replace(newContent, @"\n(\[build\.)", "\n\n$1")
-            File.WriteAllText(filePath, prettyContent)
+            File.WriteAllText(filePath, formatToml newContent)
             Ok ()
     with ex -> Error ex.Message
 
@@ -318,15 +326,16 @@ let addDependency (filePath: string) (name: string) (tomlLine: string) : Result<
             if lines |> List.exists (fun l -> regex.IsMatch l) then
                 Error $"Dependency '{name}' already exists in flappy.toml."
             else
-                match lines |> List.tryFindIndex (fun l -> l.Trim() = "[dependencies]") with
-                | Some idx ->
-                    let newLines = lines.[0..idx] @ [ tomlLine ] @ lines.[idx + 1 ..]
-                    File.WriteAllLines(filePath, newLines)
-                    Ok()
-                | None ->
-                    let newLines = lines @ [ ""; ""; "[dependencies]"; tomlLine ]
-                    File.WriteAllLines(filePath, newLines)
-                    Ok()
+                let newContent = 
+                    match lines |> List.tryFindIndex (fun l -> l.Trim() = "[dependencies]") with
+                    | Some idx ->
+                        let updated = lines.[0..idx] @ [ tomlLine ] @ lines.[idx + 1 ..]
+                        String.concat "\n" updated
+                    | None ->
+                        let updated = lines @ [ "[dependencies]"; tomlLine ]
+                        String.concat "\n" updated
+                File.WriteAllText(filePath, formatToml newContent)
+                Ok()
     with ex -> Error ex.Message
 
 let removeDependency (filePath: string) (name: string) : Result<unit, string> =

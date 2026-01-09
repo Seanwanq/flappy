@@ -72,7 +72,8 @@ let initProject (options: InitOptions) =
     if File.Exists(tomlPath) then
         Console.WriteLine("Error: flappy.toml already exists.")
     else
-        File.WriteAllText(tomlPath, defaultToml options)
+        let content = defaultToml options
+        File.WriteAllText(tomlPath, formatToml content)
         if isCpp then
             File.WriteAllText(mainPath, defaultMainCpp)
         else
