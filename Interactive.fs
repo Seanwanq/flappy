@@ -14,8 +14,11 @@ let select (prompt: string) (options: string list) (defaultIndex: int) : string 
     let mutable done' = false
     let mutable cancelled = false
     
-    let originalCursorVisible = Console.CursorVisible
-    Console.CursorVisible <- false
+    let safeSetCursorVisible visible =
+        try Console.CursorVisible <- visible with | _ -> ()
+
+    let originalCursorVisible = try Console.CursorVisible with | _ -> true
+    safeSetCursorVisible false
     
     Console.WriteLine($"{prompt} (Use arrow keys to move, Enter to select, Esc to cancel)")
     
@@ -67,4 +70,4 @@ let select (prompt: string) (options: string list) (defaultIndex: int) : string 
         
         if cancelled then None else Some options.[index]
     finally
-        Console.CursorVisible <- originalCursorVisible
+        safeSetCursorVisible originalCursorVisible
