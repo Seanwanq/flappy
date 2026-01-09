@@ -33,7 +33,7 @@ output = "bin/{options.Name}"
 type = "{options.Type}"
 
 [build.{platform}]
-compiler = "{options.Compiler}"
+compiler = '{options.Compiler}'
 arch = "{options.Arch}"
 """
 

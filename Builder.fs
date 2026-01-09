@@ -105,12 +105,16 @@ let prepareBuild (profile: BuildProfile) (targetProfile: string option) : Result
                         let objBaseDir = Path.Combine("obj", config.Build.Arch, profileStr)
                         if not (Directory.Exists objBaseDir) then Directory.CreateDirectory objBaseDir |> ignore
                         let compiler = config.Build.Compiler
-                        let isMsvc = compiler.ToLower().Contains("cl") || compiler.ToLower() = "msvc" || compiler.ToLower().Contains("clang-cl")
+                        let isMsvc = 
+                            compiler.ToLower().Contains("cl") || 
+                            compiler.ToLower() = "msvc" || 
+                            compiler.ToLower().Contains("clang-cl") ||
+                            (Config.tryGetVsRoot compiler).IsSome
                         
                         let profileFlags = 
                             match profile with 
-                            | Debug -> if isMsvc then "/Zi /Od /MDd" else "-g -O0" 
-                            | Release -> if isMsvc then "/O2 /DNDEBUG /MD" else "-O3 -DNDEBUG"
+                            | Debug -> if isMsvc then "/Zi /Od /MDd /EHsc" else "-g -O0" 
+                            | Release -> if isMsvc then "/O2 /DNDEBUG /MD /EHsc" else "-O3 -DNDEBUG"
                         
                         let archFlags = 
                             if isMsvc then "" 
@@ -325,12 +329,16 @@ let buildTest (profile: BuildProfile) (targetProfile: string option) =
                         if not (Directory.Exists objBaseDir) then Directory.CreateDirectory objBaseDir |> ignore
                         
                         let compiler = config.Build.Compiler
-                        let isMsvc = compiler.ToLower().Contains("cl") || compiler.ToLower() = "msvc" || compiler.ToLower().Contains("clang-cl")
+                        let isMsvc = 
+                            compiler.ToLower().Contains("cl") || 
+                            compiler.ToLower() = "msvc" || 
+                            compiler.ToLower().Contains("clang-cl") ||
+                            (Config.tryGetVsRoot compiler).IsSome
                         
                         let profileFlags = 
                             match profile with 
-                            | Debug -> if isMsvc then "/Zi /Od /MDd" else "-g -O0" 
-                            | Release -> if isMsvc then "/O2 /DNDEBUG /MD" else "-O3 -DNDEBUG"
+                            | Debug -> if isMsvc then "/Zi /Od /MDd /EHsc" else "-g -O0" 
+                            | Release -> if isMsvc then "/O2 /DNDEBUG /MD /EHsc" else "-O3 -DNDEBUG"
                             
                         let archFlags = 
                             if isMsvc then "" 

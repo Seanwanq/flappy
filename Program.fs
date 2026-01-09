@@ -216,7 +216,14 @@ let ensureProfileDefined (profile: string option) =
         match Config.parse content profile with
         | Error e -> Error e
         | Ok config ->
-            if config.IsProfileDefined then Ok profile
+            let compiler = config.Build.Compiler
+            let isPath = compiler.Contains("/") || compiler.Contains("\\")
+            
+            let compilerValid = 
+                if isPath then File.Exists compiler
+                else checkCommand compiler
+
+            if config.IsProfileDefined && compilerValid then Ok profile
             else
                 let target = 
                     match profile with
@@ -227,13 +234,18 @@ let ensureProfileDefined (profile: string option) =
                         elif RuntimeInformation.IsOSPlatform(OSPlatform.OSX) then "macos"
                         else "unknown"
                 
-                AnsiConsole.MarkupLine($"[yellow]Warning:[/] No configuration found for profile/platform '[cyan]{target}[/]'.")
-                if AnsiConsole.Confirm("Would you like to configure it now?") then
+                let reason = if not config.IsProfileDefined then "No configuration found" else $"Compiler not found at '[red]{compiler}[/]'"
+                AnsiConsole.MarkupLine($"[yellow]Warning:[/] {reason} for profile/platform '[cyan]{target}[/]'.")
+                
+                if not AnsiConsole.Profile.Capabilities.Interactive then
+                    Error $"Non-interactive mode: Compiler path is invalid and cannot prompt for configuration."
+                elif AnsiConsole.Confirm("Would you like to configure (or re-configure) it now?") then
                     match interactiveConfigure target with
                     | Ok () -> Ok profile
                     | Error e -> Error e
                 else
-                    Error "Build cancelled by user."
+                    if not compilerValid then Error $"Compiler check failed: {compiler}"
+                    else Ok profile
 
 let parseInitArgs (args: string list) =
     let rec parse (opts: Map<string, string>) (rest: string list) =
@@ -404,18 +416,11 @@ let main args =
         | Error e ->
             Console.Error.WriteLine($"Sync failed: {e}")
             1
-    | "cache" :: subArgs ->
-        match subArgs with
-        | ["clean"] ->
-            match Flappy.DependencyManager.cleanCache() with
-            | Ok () -> 0
-            | Error e ->
-                Console.Error.WriteLine(e)
-                1
-        | _ ->
-            Console.WriteLine("Usage: flappy cache <command>")
-            Console.WriteLine("Commands:")
-            Console.WriteLine("  clean         Clear the global dependency cache")
+    | ["cache"; "clean"] ->
+        match Flappy.DependencyManager.cleanCache() with
+        | Ok () -> 0
+        | Error e ->
+            Console.Error.WriteLine(e)
             1
     | "add" :: name :: rest ->
         let args = parseInitArgs rest 

@@ -375,28 +375,71 @@ let removeDependency (filePath: string) (name: string) : Result<unit, string> =
                 Ok()
     with ex -> Error ex.Message
 
-let findVsInstallPath () =
+type VsInstallation = {
+    Name: string
+    Path: string
+    Version: string
+}
+
+let getVsInstallations () : VsInstallation list =
     let vswherePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Microsoft Visual Studio", "Installer", "vswhere.exe")
     if File.Exists vswherePath then
-        let psi = ProcessStartInfo(FileName = vswherePath, Arguments = "-latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath", UseShellExecute = false, RedirectStandardOutput = true, CreateNoWindow = true)
-        use p = Process.Start(psi)
-        let output = p.StandardOutput.ReadToEnd().Trim()
-        p.WaitForExit()
-        if p.ExitCode = 0 && not (String.IsNullOrWhiteSpace output) then Some output else None
-    else None
+        let psi = ProcessStartInfo(FileName = vswherePath, Arguments = "-products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -format json", UseShellExecute = false, RedirectStandardOutput = true, CreateNoWindow = true)
+        try
+            use p = Process.Start(psi)
+            let output = p.StandardOutput.ReadToEnd()
+            p.WaitForExit()
+            if p.ExitCode = 0 then
+                let nameRegex = Regex(@"""displayName"":\s*""(?<val>.*?)""")
+                let pathRegex = Regex(@"""installationPath"":\s*""(?<val>.*?)""")
+                let versionRegex = Regex(@"""productDisplayVersion"":\s*""(?<val>.*?)""")
+                
+                let names = nameRegex.Matches(output) |> Seq.cast<Match> |> Seq.map (fun m -> m.Groups.["val"].Value) |> Seq.toList
+                let paths = pathRegex.Matches(output) |> Seq.cast<Match> |> Seq.map (fun m -> m.Groups.["val"].Value.Replace("\\\\", "\\")) |> Seq.toList
+                let versions = versionRegex.Matches(output) |> Seq.cast<Match> |> Seq.map (fun m -> m.Groups.["val"].Value) |> Seq.toList
+                
+                List.zip3 names paths versions 
+                |> List.map (fun (n, p, v) -> { Name = n; Path = p; Version = v })
+            else []
+        with _ -> []
+    else []
+
+let findVsInstallPath () =
+    getVsInstallations () |> List.tryHead |> Option.map (fun x -> x.Path)
 
 let getVcVarsAllPath (vsPath: string) =
     let path = Path.Combine(vsPath, "VC", "Auxiliary", "Build", "vcvarsall.bat")
     if File.Exists path then Some path else None
 
+let tryGetVsRoot (path: string) =
+    let mutable current = if File.Exists path then Path.GetDirectoryName(path) else path
+    let mutable found = None
+    while not (String.IsNullOrEmpty current) && found.IsNone do
+        if Directory.Exists(Path.Combine(current, "VC", "Auxiliary", "Build")) then
+            found <- Some current
+        else
+            current <- Path.GetDirectoryName(current)
+    found
+
 let patchCommandForMsvc (compiler: string) (args: string) (arch: string) : (string * string) option =
     let c = compiler.ToLower()
     let msvcCommands = ["cl"; "cl.exe"; "msvc"; "clang-cl"; "clang-cl.exe"; "lib"; "lib.exe"]
-    if List.contains c msvcCommands || (c = "cmd.exe" && args.Contains("cl ")) then
-        match findVsInstallPath() with
+    
+    // Check if the compiler is a standard command or an absolute path
+    let isStandardMsvc = List.contains c msvcCommands || (c = "cmd.exe" && args.Contains("cl "))
+    let vsRootFromPath = tryGetVsRoot compiler
+    
+    if isStandardMsvc || vsRootFromPath.IsSome then
+        let vsPathOpt =
+            if vsRootFromPath.IsSome then vsRootFromPath
+            else findVsInstallPath()
+            
+        match vsPathOpt with
         | Some vsPath ->
             match getVcVarsAllPath vsPath with
-            | Some vcvarsPath -> Some ("cmd.exe", $"/c \"call \"{vcvarsPath}\" {arch} && {compiler} {args}\" ")
+            | Some vcvarsPath -> 
+                let realCmd = if vsRootFromPath.IsSome then $"\"{compiler}\"" else compiler
+                Some ("cmd.exe", $"/c \"call \"{vcvarsPath}\" {arch} && {realCmd} {args}\" ")
             | None -> None
         | None -> None
     else None
