@@ -163,17 +163,53 @@ let buildDependency (dep: Dependency) (path: string) (profile: BuildProfile) (co
             Ok()
 
 let resolveDependencyMetadata (dep: Dependency) (packageDir: string) (resolved: string) =
+    let isFlappy = File.Exists(Path.Combine(packageDir, "flappy.toml"))
+    
+    let scanFiles root patterns =
+        patterns |> List.collect (fun p -> 
+            if Directory.Exists root then Directory.GetFiles(root, p, SearchOption.AllDirectories) |> Array.toList 
+            else [])
+
+    // 1. Resolve Include Paths
     let includePaths =
         match dep.IncludeDirs with
         | Some dirs -> dirs |> List.map (fun d -> Path.Combine(packageDir, d))
         | None -> 
-            let inc = Path.Combine(packageDir, "include")
-            if Directory.Exists inc then [ inc ] else [ packageDir ]
+            if isFlappy then
+                let distInc = Path.Combine(packageDir, "dist", "include")
+                let inc = Path.Combine(packageDir, "include")
+                if Directory.Exists distInc then [ distInc ]
+                elif Directory.Exists inc then [ inc ]
+                else [ packageDir ]
+            else
+                let inc = Path.Combine(packageDir, "include")
+                if Directory.Exists inc then [ inc ] else [ packageDir ]
+                
+    // 2. Resolve Library Files (Link-time)
     let libs =
         match dep.Libs with
         | Some libFiles -> libFiles |> List.map (fun l -> Path.Combine(packageDir, l))
-        | None -> []
-    { IncludePaths = includePaths; Libs = libs; Resolved = resolved }
+        | None -> 
+            let libExts = if RuntimeInformation.IsOSPlatform(OSPlatform.Windows) then [ "*.lib" ] else [ "*.a"; "*.so"; "*.dylib" ]
+            if isFlappy then
+                let distLib = Path.Combine(packageDir, "dist", "lib")
+                if Directory.Exists distLib then scanFiles distLib libExts
+                else scanFiles packageDir libExts
+            else
+                scanFiles packageDir libExts
+
+    // 3. Resolve Runtime Libraries (DLLs, Shared Objects)
+    let runtimeLibs =
+        let dllExts = [ "*.dll"; "*.so"; "*.dylib" ]
+        if isFlappy then
+            let distLib = Path.Combine(packageDir, "dist", "lib")
+            let distBin = Path.Combine(packageDir, "dist", "bin")
+            let found = scanFiles distLib dllExts @ scanFiles distBin dllExts
+            if found.IsEmpty then scanFiles packageDir dllExts else found
+        else
+            scanFiles packageDir dllExts
+                
+    { IncludePaths = includePaths; Libs = libs |> List.distinct; RuntimeLibs = runtimeLibs |> List.distinct; Resolved = resolved }
 
 let getCacheKey (dep: Dependency) =
     match dep.Source with

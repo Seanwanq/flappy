@@ -53,6 +53,7 @@ type Dependency =
 type DependencyMetadata = 
     { IncludePaths: string list
       Libs: string list
+      RuntimeLibs: string list
       Resolved: string }
 
 type TestConfig = 

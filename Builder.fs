@@ -255,7 +255,7 @@ let build (profile: BuildProfile) (targetProfile: string option) =
                 else
                     let isLibrary = buildType = "lib" || buildType = "static"
                     let allObjs = objFiles |> Seq.map (fun f -> "\"" + f + "\"") |> String.concat " "
-                    let depLibs = if not isLibrary then ctx.DepResults |> List.collect (fun (meta: DependencyMetadata) -> if not meta.Libs.IsEmpty then meta.Libs else let pkgRoot = (let inc = if meta.IncludePaths.IsEmpty then "." else meta.IncludePaths.[0] in if inc.EndsWith("include") || inc.EndsWith("include" + string Path.DirectorySeparatorChar) then Path.GetDirectoryName(inc) else inc) in let libExts = if ctx.IsMsvc then [ "*.lib" ] else [ "*.a"; "*.so" ] in libExts |> List.collect (fun ext -> if Directory.Exists pkgRoot then Directory.GetFiles(pkgRoot, ext, SearchOption.AllDirectories) |> Array.toList else [])) |> List.distinct |> List.map (fun l -> "\"" + l + "\"") |> String.concat " " else ""
+                    let depLibs = if not isLibrary then ctx.DepResults |> List.collect (fun m -> m.Libs) |> List.distinct |> List.map (fun l -> "\"" + l + "\"") |> String.concat " " else ""
                     let linkCmd, linkArgs = if isLibrary then (if ctx.IsMsvc then "lib", "/NOLOGO /OUT:\"" + outputName + "\" " + allObjs else "ar", "rcs \"" + outputName + "\" " + allObjs) else (let extraLinkFlags = if ctx.IsMsvc then (match profile with Debug -> "/DEBUG" | Release -> "") else "" in let baseArgs = if ctx.IsMsvc then ctx.TypeFlags + " " + allObjs + " " + depLibs + " " + extraLinkFlags + " " + ctx.CustomFlags + " /Fe:\"" + ctx.Config.Build.Output + "\" /link /PDB:\"" + ctx.Config.Build.Output + ".pdb\"" else ctx.TypeFlags + " " + ctx.ArchFlags + " " + allObjs + " " + depLibs + " " + ctx.CustomFlags + " -o \"" + ctx.Config.Build.Output + "\"" in ctx.Compiler, baseArgs)
                     Log.info (if isLibrary then "Archiving" else "Linking") outputName
                     let finalLinkCmd, finalLinkArgs = match patchCommandForMsvc linkCmd linkArgs ctx.Config.Build.Arch with | Some (c, a) -> (c, a) | None -> (linkCmd, linkArgs)
@@ -264,15 +264,12 @@ let build (profile: BuildProfile) (targetProfile: string option) =
                     | Ok () ->
                         if not isLibrary then
                             let outDir = if String.IsNullOrEmpty(Path.GetDirectoryName(outputName)) then "." else Path.GetDirectoryName(outputName)
-                            for (meta: DependencyMetadata) in ctx.DepResults do 
-                                for includePath in meta.IncludePaths do 
-                                    let pkgRoot = if includePath.EndsWith("include") || includePath.EndsWith("include" + string Path.DirectorySeparatorChar) then Path.GetDirectoryName(includePath) else includePath 
-                                    let dlls = [ "*.dll"; "*.so"; "*.dylib" ] |> List.collect (fun ext -> if Directory.Exists pkgRoot then Directory.GetFiles(pkgRoot, ext, SearchOption.AllDirectories) |> Array.toList else []) 
-                                    for dll in dlls do 
-                                        let dest = Path.Combine(outDir, Path.GetFileName(dll)) 
-                                        if not (File.Exists(dest)) || FileInfo(dll).LastWriteTime > FileInfo(dest).LastWriteTime then 
-                                            Log.info "Copying" (Path.GetFileName(dll))
-                                            File.Copy(dll, dest, true)
+                            for meta in ctx.DepResults do 
+                                for dll in meta.RuntimeLibs do 
+                                    let dest = Path.Combine(outDir, Path.GetFileName(dll)) 
+                                    if not (File.Exists(dest)) || FileInfo(dll).LastWriteTime > FileInfo(dest).LastWriteTime then 
+                                        Log.info "Copying" (Path.GetFileName(dll))
+                                        File.Copy(dll, dest, true)
                         createDist ctx
                         Ok ()
 let run (profile: BuildProfile) (extraArgs: string) (targetProfile: string option) =
@@ -384,7 +381,7 @@ let buildTest (profile: BuildProfile) (targetProfile: string option) =
                                 else None
                             
                             let depLibs = 
-                                let libs = depResults |> List.collect (fun (meta: DependencyMetadata) -> if not meta.Libs.IsEmpty then meta.Libs else let pkgRoot = (let inc = if meta.IncludePaths.IsEmpty then "." else meta.IncludePaths.[0] in if inc.EndsWith("include") || inc.EndsWith("include" + string Path.DirectorySeparatorChar) then Path.GetDirectoryName(inc) else inc) in let libExts = if isMsvc then [ "*.lib" ] else [ "*.a"; "*.so" ] in libExts |> List.collect (fun ext -> if Directory.Exists pkgRoot then Directory.GetFiles(pkgRoot, ext, SearchOption.AllDirectories) |> Array.toList else [])) 
+                                let libs = depResults |> List.collect (fun m -> m.Libs)
                                 let all = match projectLib with | Some l -> l :: libs | None -> libs
                                 all |> List.distinct |> List.map (fun l -> "\"" + l + "\"") |> String.concat " "
 
@@ -402,7 +399,12 @@ let buildTest (profile: BuildProfile) (targetProfile: string option) =
                             | Ok () ->
                                 // Copy DLLs
                                 let outDir = if String.IsNullOrEmpty(Path.GetDirectoryName(outputName)) then "." else Path.GetDirectoryName(outputName)
-                                for (meta: DependencyMetadata) in depResults do for includePath in meta.IncludePaths do let pkgRoot = if includePath.EndsWith("include") || includePath.EndsWith("include" + string Path.DirectorySeparatorChar) then Path.GetDirectoryName(includePath) else includePath in let dlls = [ "*.dll"; "*.so"; "*.dylib" ] |> List.collect (fun ext -> if Directory.Exists pkgRoot then Directory.GetFiles(pkgRoot, ext, SearchOption.AllDirectories) |> Array.toList else []) in for dll in dlls do let dest = Path.Combine(outDir, Path.GetFileName(dll)) in if not (File.Exists(dest)) || FileInfo(dll).LastWriteTime > FileInfo(dest).LastWriteTime then Log.info "Copying" (Path.GetFileName(dll)); File.Copy(dll, dest, true)
+                                for meta in depResults do 
+                                    for dll in meta.RuntimeLibs do 
+                                        let dest = Path.Combine(outDir, Path.GetFileName(dll)) 
+                                        if not (File.Exists(dest)) || FileInfo(dll).LastWriteTime > FileInfo(dest).LastWriteTime then 
+                                            Log.info "Copying" (Path.GetFileName(dll))
+                                            File.Copy(dll, dest, true)
                                 Ok ()
 
 let runTest (profile: BuildProfile) (extraArgs: string) (targetProfile: string option) =
