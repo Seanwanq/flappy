@@ -205,6 +205,12 @@ let main args =
             sw.Stop()
             let profileName = if profile = Release then "release" else "dev"
             Log.info "Finished" $"{profileName} target(s) in {sw.Elapsed.TotalSeconds:F2}s"
+            
+            // Auto-generate compilation database
+            match Flappy.Generator.generate profileArg with
+            | Ok () -> ()
+            | Error e -> Log.warn "CompDB" ("Failed to update compile_commands.json: " + e)
+            
             0
         | Error e -> 
             Console.Error.WriteLine($"Build failed: {e}")
@@ -222,7 +228,13 @@ let main args =
             | None -> ""
         let sw = Diagnostics.Stopwatch.StartNew()
         match run profile extraArgs profileArg with
-        | Ok () -> sw.Stop(); 0
+        | Ok () -> 
+            sw.Stop()
+            // Auto-generate compilation database
+            match Flappy.Generator.generate profileArg with
+            | Ok () -> ()
+            | Error e -> Log.warn "CompDB" ("Failed to update compile_commands.json: " + e)
+            0
         | Error e ->
             Console.Error.WriteLine($"Run failed: {e}")
             1
@@ -242,6 +254,16 @@ let main args =
         | Ok () -> sw.Stop(); 0
         | Error e ->
             Console.Error.WriteLine($"Test failed: {e}")
+            1
+    | "compdb" :: tail ->
+        let profileArg, otherArgs = 
+            match tail with
+            | head :: rest when not (head.StartsWith("-")) -> Some head, rest
+            | _ -> None, tail
+        match Flappy.Generator.generate profileArg with
+        | Ok () -> 0
+        | Error e ->
+            Console.Error.WriteLine($"CompDB failed: {e}")
             1
     | ["xplat"] ->
         runXPlatWizard ()
@@ -360,6 +382,7 @@ let main args =
         Console.WriteLine("  build [--release]     Build the project")
         Console.WriteLine("  run [--release]       Build and run the project")
         Console.WriteLine("  test [--release]      Build and run tests")
+        Console.WriteLine("  compdb [profile]      Generate compilation database (compile_commands.json)")
         Console.WriteLine("  xplat                 Configure toolchains for other platforms")
         Console.WriteLine("  clean                 Remove build artifacts (bin/ and obj/)")
         Console.WriteLine("  cache clean           Clear the global dependency cache")

@@ -63,7 +63,22 @@ let sync () =
                 Log.info "Locked" (string lockEntries.Length + " dependencies")
                 Ok ()
 
-let build (profile: BuildProfile) (targetProfile: string option) = 
+type BuildContext = {
+    Config: FlappyConfig
+    Compiler: string
+    IsMsvc: bool
+    AllSources: string list
+    IncludePaths: string list
+    Defines: string list
+    ObjBaseDir: string
+    ProfileFlags: string
+    ArchFlags: string
+    TypeFlags: string
+    CustomFlags: string
+    DepResults: DependencyMetadata list
+}
+
+let prepareBuild (profile: BuildProfile) (targetProfile: string option) : Result<BuildContext, string> =
     if not (File.Exists "flappy.toml") then Error "flappy.toml not found."
     else
         let content = File.ReadAllText "flappy.toml"
@@ -109,59 +124,89 @@ let build (profile: BuildProfile) (targetProfile: string option) =
                             | "dll" | "shared" | "dynamic" -> if isMsvc then "/LD" else "-shared -fPIC" 
                             | _ -> ""
                         
-                        let includeFlags = if isMsvc then includePaths |> List.map (fun p -> "/I\"" + p + "\"") |> String.concat " " else includePaths |> List.map (fun p -> "-I\"" + p + "\"") |> String.concat " "
-                        let defineFlags = if isMsvc then allDefines |> List.map (fun d -> "/D" + d) |> String.concat " " else allDefines |> List.map (fun d -> "-D" + d) |> String.concat " "
                         let customFlags = config.Build.Flags |> String.concat " "
-                        let isInterface (path: string) = let ext = Path.GetExtension(path).ToLower() in ext = ".ixx" || ext = ".cppm"
-                        let interfaces = allSources |> List.filter isInterface
-                        let implementations = allSources |> List.filter (isInterface >> not)
-                        let compileFile (src: string) = async {
-                            let relPath = Path.GetRelativePath("src", src)
-                            let objExt = if isMsvc then ".obj" else ".o"
-                            let objPath = Path.Combine(objBaseDir, relPath + objExt)
-                            let objDir = Path.GetDirectoryName(objPath)
-                            if not (Directory.Exists objDir) then Directory.CreateDirectory objDir |> ignore
-                            let srcInfo = FileInfo(src)
-                            let objInfo = FileInfo(objPath)
-                            if not objInfo.Exists || srcInfo.LastWriteTime > objInfo.LastWriteTime then
-                                Log.info "Compiling" relPath
-                                let extraModuleFlags = if isMsvc && isInterface src then "/interface" else ""
-                                let compileArgs = if isMsvc then let pdbPath = Path.Combine(objBaseDir, "vc.pdb") in "/c /nologo /FS /std:" + config.Build.Standard + " /EHsc " + profileFlags + " " + includeFlags + " " + defineFlags + " " + archFlags + " " + customFlags + " " + extraModuleFlags + " /Fo:\"" + objPath + "\" /Fd:\"" + pdbPath + "\" \"" + src + "\"" else "-c -std=" + config.Build.Standard + " " + profileFlags + " " + includeFlags + " " + defineFlags + " " + archFlags + " " + customFlags + " -o \"" + objPath + "\" \"" + src + "\""
-                                let finalCmd, finalArgs = match patchCommandForMsvc compiler compileArgs config.Build.Arch with | Some (c, a) -> (c, a) | None -> (compiler, compileArgs)
-                                let res = runCommand finalCmd finalArgs
-                                match res with | Error e -> return Some (objPath, e) | Ok () -> return None
-                            else return None }
-                        let interfaceResults = interfaces |> List.map compileFile |> Async.Parallel |> Async.RunSynchronously
-                        let interfaceFailures = interfaceResults |> Array.choose id
-                        if interfaceFailures.Length > 0 then Error (snd interfaceFailures.[0])
-                        else
-                            let implResults = implementations |> List.map compileFile |> Async.Parallel |> Async.RunSynchronously
-                            let implFailures = implResults |> Array.choose id
-                            if implFailures.Length > 0 then Error (snd implFailures.[0])
-                            else
-                                let objFiles = allSources |> List.map (fun src -> let relPath = Path.GetRelativePath("src", src) in let objExt = if isMsvc then ".obj" else ".o" in Path.Combine(objBaseDir, relPath + objExt))
-                                let buildType = config.Build.Type.ToLower()
-                                let outputName = 
-                                    if buildType = "dll" || buildType = "shared" then (if isMsvc then config.Build.Output + ".dll" elif RuntimeInformation.IsOSPlatform(OSPlatform.OSX) then config.Build.Output + ".dylib" else config.Build.Output + ".so") 
-                                    elif buildType = "lib" || buildType = "static" then (if isMsvc then config.Build.Output + ".lib" else config.Build.Output + ".a") 
-                                    else (if RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && not (config.Build.Output.EndsWith(".exe")) then config.Build.Output + ".exe" else config.Build.Output)
-                                let outInfo = FileInfo(outputName)
-                                let latestObjTime = if objFiles.IsEmpty then DateTime.MinValue else objFiles |> Seq.map (fun f -> FileInfo(f).LastWriteTime) |> Seq.max
-                                if outInfo.Exists && outInfo.LastWriteTime > latestObjTime then Log.info "Up-to-date" ("[" + config.Package.Name + "]"); Ok () 
-                                else
-                                    let isLibrary = buildType = "lib" || buildType = "static"
-                                    let allObjs = objFiles |> Seq.map (fun f -> "\"" + f + "\"") |> String.concat " "
-                                    let depLibs = if not isLibrary then depResults |> List.collect (fun meta -> if not meta.Libs.IsEmpty then meta.Libs else let pkgRoot = (let inc = if meta.IncludePaths.IsEmpty then "." else meta.IncludePaths.[0] in if inc.EndsWith("include") || inc.EndsWith("include" + string Path.DirectorySeparatorChar) then Path.GetDirectoryName(inc) else inc) in let libExts = if isMsvc then [ "*.lib" ] else [ "*.a"; "*.so" ] in libExts |> List.collect (fun ext -> if Directory.Exists pkgRoot then Directory.GetFiles(pkgRoot, ext, SearchOption.AllDirectories) |> Array.toList else [])) |> List.distinct |> List.map (fun l -> "\"" + l + "\"") |> String.concat " " else ""
-                                    let linkCmd, linkArgs = if isLibrary then (if isMsvc then "lib", "/NOLOGO /OUT:\"" + outputName + "\" " + allObjs else "ar", "rcs \"" + outputName + "\" " + allObjs) else (let extraLinkFlags = if isMsvc then (match profile with Debug -> "/DEBUG" | Release -> "") else "" in let baseArgs = if isMsvc then typeFlags + " " + allObjs + " " + depLibs + " " + extraLinkFlags + " " + customFlags + " /Fe:\"" + config.Build.Output + "\" /link /PDB:\"" + config.Build.Output + ".pdb\"" else typeFlags + " " + archFlags + " " + allObjs + " " + depLibs + " " + customFlags + " -o \"" + config.Build.Output + "\"" in compiler, baseArgs)
-                                    Log.info (if isLibrary then "Archiving" else "Linking") outputName
-                                    let finalLinkCmd, finalLinkArgs = match patchCommandForMsvc linkCmd linkArgs config.Build.Arch with | Some (c, a) -> (c, a) | None -> (linkCmd, linkArgs)
-                                    match runCommand finalLinkCmd finalLinkArgs with
-                                    | Error e -> Error e
-                                    | Ok () ->
-                                        if not isLibrary then
-                                            let outDir = if String.IsNullOrEmpty(Path.GetDirectoryName(outputName)) then "." else Path.GetDirectoryName(outputName)
-                                            for meta in depResults do for includePath in meta.IncludePaths do let pkgRoot = if includePath.EndsWith("include") || includePath.EndsWith("include" + string Path.DirectorySeparatorChar) then Path.GetDirectoryName(includePath) else includePath in let dlls = [ "*.dll"; "*.so"; "*.dylib" ] |> List.collect (fun ext -> if Directory.Exists pkgRoot then Directory.GetFiles(pkgRoot, ext, SearchOption.AllDirectories) |> Array.toList else []) in for dll in dlls do let dest = Path.Combine(outDir, Path.GetFileName(dll)) in if not (File.Exists(dest)) || FileInfo(dll).LastWriteTime > FileInfo(dest).LastWriteTime then Log.info "Copying" (Path.GetFileName(dll)); File.Copy(dll, dest, true)
-                                        Ok ()
+
+                        Ok {
+                            Config = config
+                            Compiler = compiler
+                            IsMsvc = isMsvc
+                            AllSources = allSources
+                            IncludePaths = includePaths
+                            Defines = allDefines
+                            ObjBaseDir = objBaseDir
+                            ProfileFlags = profileFlags
+                            ArchFlags = archFlags
+                            TypeFlags = typeFlags
+                            CustomFlags = customFlags
+                            DepResults = depResults
+                        }
+
+let build (profile: BuildProfile) (targetProfile: string option) = 
+    match prepareBuild profile targetProfile with
+    | Error e -> Error e
+    | Ok ctx ->
+        let includeFlags = if ctx.IsMsvc then ctx.IncludePaths |> List.map (fun p -> "/I\"" + p + "\"") |> String.concat " " else ctx.IncludePaths |> List.map (fun p -> "-I\"" + p + "\"") |> String.concat " "
+        let defineFlags = if ctx.IsMsvc then ctx.Defines |> List.map (fun d -> "/D" + d) |> String.concat " " else ctx.Defines |> List.map (fun d -> "-D" + d) |> String.concat " "
+        
+        let isInterface (path: string) = let ext = Path.GetExtension(path).ToLower() in ext = ".ixx" || ext = ".cppm"
+        let interfaces = ctx.AllSources |> List.filter isInterface
+        let implementations = ctx.AllSources |> List.filter (isInterface >> not)
+        
+        let compileFile (src: string) = async {
+            let relPath = Path.GetRelativePath("src", src)
+            let objExt = if ctx.IsMsvc then ".obj" else ".o"
+            let objPath = Path.Combine(ctx.ObjBaseDir, relPath + objExt)
+            let objDir = Path.GetDirectoryName(objPath)
+            if not (Directory.Exists objDir) then Directory.CreateDirectory objDir |> ignore
+            let srcInfo = FileInfo(src)
+            let objInfo = FileInfo(objPath)
+            if not objInfo.Exists || srcInfo.LastWriteTime > objInfo.LastWriteTime then
+                Log.info "Compiling" relPath
+                let extraModuleFlags = if ctx.IsMsvc && isInterface src then "/interface" else ""
+                let compileArgs = 
+                    if ctx.IsMsvc then 
+                        let pdbPath = Path.Combine(ctx.ObjBaseDir, "vc.pdb") 
+                        "/c /nologo /FS /std:" + ctx.Config.Build.Standard + " /EHsc " + ctx.ProfileFlags + " " + includeFlags + " " + defineFlags + " " + ctx.ArchFlags + " " + ctx.CustomFlags + " " + extraModuleFlags + " /Fo:\"" + objPath + "\" /Fd:\"" + pdbPath + "\" \"" + src + "\"" 
+                    else 
+                        "-c -std=" + ctx.Config.Build.Standard + " " + ctx.ProfileFlags + " " + includeFlags + " " + defineFlags + " " + ctx.ArchFlags + " " + ctx.CustomFlags + " -o \"" + objPath + "\" \"" + src + "\""
+                
+                let finalCmd, finalArgs = match patchCommandForMsvc ctx.Compiler compileArgs ctx.Config.Build.Arch with | Some (c, a) -> (c, a) | None -> (ctx.Compiler, compileArgs)
+                let res = runCommand finalCmd finalArgs
+                match res with | Error e -> return Some (objPath, e) | Ok () -> return None
+            else return None }
+            
+        let interfaceResults = interfaces |> List.map compileFile |> Async.Parallel |> Async.RunSynchronously
+        let interfaceFailures = interfaceResults |> Array.choose id
+        if interfaceFailures.Length > 0 then Error (snd interfaceFailures.[0])
+        else
+            let implResults = implementations |> List.map compileFile |> Async.Parallel |> Async.RunSynchronously
+            let implFailures = implResults |> Array.choose id
+            if implFailures.Length > 0 then Error (snd implFailures.[0])
+            else
+                let objFiles = ctx.AllSources |> List.map (fun src -> let relPath = Path.GetRelativePath("src", src) in let objExt = if ctx.IsMsvc then ".obj" else ".o" in Path.Combine(ctx.ObjBaseDir, relPath + objExt))
+                let buildType = ctx.Config.Build.Type.ToLower()
+                let outputName = 
+                    if buildType = "dll" || buildType = "shared" then (if ctx.IsMsvc then ctx.Config.Build.Output + ".dll" elif RuntimeInformation.IsOSPlatform(OSPlatform.OSX) then ctx.Config.Build.Output + ".dylib" else ctx.Config.Build.Output + ".so") 
+                    elif buildType = "lib" || buildType = "static" then (if ctx.IsMsvc then ctx.Config.Build.Output + ".lib" else ctx.Config.Build.Output + ".a") 
+                    else (if RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && not (ctx.Config.Build.Output.EndsWith(".exe")) then ctx.Config.Build.Output + ".exe" else ctx.Config.Build.Output)
+                
+                let outInfo = FileInfo(outputName)
+                let latestObjTime = if objFiles.IsEmpty then DateTime.MinValue else objFiles |> Seq.map (fun f -> FileInfo(f).LastWriteTime) |> Seq.max
+                if outInfo.Exists && outInfo.LastWriteTime > latestObjTime then Log.info "Up-to-date" ("[" + ctx.Config.Package.Name + "]"); Ok () 
+                else
+                    let isLibrary = buildType = "lib" || buildType = "static"
+                    let allObjs = objFiles |> Seq.map (fun f -> "\"" + f + "\"") |> String.concat " "
+                    let depLibs = if not isLibrary then ctx.DepResults |> List.collect (fun meta -> if not meta.Libs.IsEmpty then meta.Libs else let pkgRoot = (let inc = if meta.IncludePaths.IsEmpty then "." else meta.IncludePaths.[0] in if inc.EndsWith("include") || inc.EndsWith("include" + string Path.DirectorySeparatorChar) then Path.GetDirectoryName(inc) else inc) in let libExts = if ctx.IsMsvc then [ "*.lib" ] else [ "*.a"; "*.so" ] in libExts |> List.collect (fun ext -> if Directory.Exists pkgRoot then Directory.GetFiles(pkgRoot, ext, SearchOption.AllDirectories) |> Array.toList else [])) |> List.distinct |> List.map (fun l -> "\"" + l + "\"") |> String.concat " " else ""
+                    let linkCmd, linkArgs = if isLibrary then (if ctx.IsMsvc then "lib", "/NOLOGO /OUT:\"" + outputName + "\" " + allObjs else "ar", "rcs \"" + outputName + "\" " + allObjs) else (let extraLinkFlags = if ctx.IsMsvc then (match profile with Debug -> "/DEBUG" | Release -> "") else "" in let baseArgs = if ctx.IsMsvc then ctx.TypeFlags + " " + allObjs + " " + depLibs + " " + extraLinkFlags + " " + ctx.CustomFlags + " /Fe:\"" + ctx.Config.Build.Output + "\" /link /PDB:\"" + ctx.Config.Build.Output + ".pdb\"" else ctx.TypeFlags + " " + ctx.ArchFlags + " " + allObjs + " " + depLibs + " " + ctx.CustomFlags + " -o \"" + ctx.Config.Build.Output + "\"" in ctx.Compiler, baseArgs)
+                    Log.info (if isLibrary then "Archiving" else "Linking") outputName
+                    let finalLinkCmd, finalLinkArgs = match patchCommandForMsvc linkCmd linkArgs ctx.Config.Build.Arch with | Some (c, a) -> (c, a) | None -> (linkCmd, linkArgs)
+                    match runCommand finalLinkCmd finalLinkArgs with
+                    | Error e -> Error e
+                    | Ok () ->
+                        if not isLibrary then
+                            let outDir = if String.IsNullOrEmpty(Path.GetDirectoryName(outputName)) then "." else Path.GetDirectoryName(outputName)
+                            for meta in ctx.DepResults do for includePath in meta.IncludePaths do let pkgRoot = if includePath.EndsWith("include") || includePath.EndsWith("include" + string Path.DirectorySeparatorChar) then Path.GetDirectoryName(includePath) else includePath in let dlls = [ "*.dll"; "*.so"; "*.dylib" ] |> List.collect (fun ext -> if Directory.Exists pkgRoot then Directory.GetFiles(pkgRoot, ext, SearchOption.AllDirectories) |> Array.toList else []) in for dll in dlls do let dest = Path.Combine(outDir, Path.GetFileName(dll)) in if not (File.Exists(dest)) || FileInfo(dll).LastWriteTime > FileInfo(dest).LastWriteTime then Log.info "Copying" (Path.GetFileName(dll)); File.Copy(dll, dest, true)
+                        Ok ()
 
 let run (profile: BuildProfile) (extraArgs: string) (targetProfile: string option) =
     match build profile targetProfile with

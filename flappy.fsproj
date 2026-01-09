@@ -17,6 +17,7 @@
     <Compile Include="Scaffolding.fs" />
     <Compile Include="Interactive.fs" />
     <Compile Include="Builder.fs" />
+    <Compile Include="Generator.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
 
