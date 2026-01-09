@@ -35,9 +35,9 @@ let runCommand (cmd: string) (args: string) =
             Error ("Command failed with exit code " + string p.ExitCode)
     with ex -> Error ("Failed to run command: " + ex.Message)
 
-let installDependencies (deps: Dependency list) (profile: BuildProfile) : Result<DependencyMetadata list, string> = 
+let installDependencies (deps: Dependency list) (profile: BuildProfile) (compiler: string) : Result<DependencyMetadata list, string> = 
     let results = deps |> List.map (fun d -> 
-        match install d profile with 
+        match install d profile compiler with 
         | Ok meta -> Ok meta 
         | Error e -> Error ("Failed to install " + d.Name + ": " + e))
     let failures = results |> List.choose (function Error e -> Some e | _ -> None)
@@ -52,7 +52,7 @@ let sync () =
         | Error e -> Error ("Failed to parse configuration: " + e)
         | Ok config ->
             Log.info "Syncing" ("[" + config.Package.Name + "]")
-            match installDependencies config.Dependencies Debug with
+            match installDependencies config.Dependencies Debug config.Build.Compiler with
             | Error e -> Error e
             | Ok results ->
                 let lockEntries = results |> List.mapi (fun i meta ->

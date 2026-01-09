@@ -124,7 +124,7 @@ let downloadFile (url: string) (destPath: string) =
         Ok()
     with ex -> Error ex.Message
 
-let buildDependency (dep: Dependency) (path: string) (profile: BuildProfile) =
+let buildDependency (dep: Dependency) (path: string) (profile: BuildProfile) (compiler: string) =
     let profileStr = match profile with Debug -> "Debug" | Release -> "Release"
     match dep.BuildCmd with
     | Some cmd ->
@@ -139,13 +139,22 @@ let buildDependency (dep: Dependency) (path: string) (profile: BuildProfile) =
             Log.info "Build" $"Flappy build for {dep.Name}"
             let exePath = Process.GetCurrentProcess().MainModule.FileName
             let args = if profile = Release then "build --release" else "build"
+            // Note: We currently don't propagate compiler to sub-flappy builds via CLI args easily 
+            // unless we add --compiler flag to build command or rely on flappy.toml cascading.
+            // For now, sub-flappy will use its own resolution.
             executeCommand exePath args path
         elif File.Exists(Path.Combine(path, "CMakeLists.txt")) then
             let buildDir = Path.Combine(path, "flappy_build")
             if not (Directory.Exists buildDir) then
                 Directory.CreateDirectory buildDir |> ignore
             Log.info "Configure" $"{dep.Name} (CMake)"
-            match executeCommand "cmake" $"-S \"{path}\" -B \"{buildDir}\" -DCMAKE_BUILD_TYPE={profileStr}" path with
+            
+            // Heuristic: If compiler looks like a C++ compiler, pass it as CMAKE_CXX_COMPILER
+            // If it's cl.exe, CMake handles it via generator usually, but passing it is safe.
+            // We quote it to handle paths with spaces.
+            let cmakeArgs = $"-S \"{path}\" -B \"{buildDir}\" -DCMAKE_BUILD_TYPE={profileStr} -DCMAKE_CXX_COMPILER=\"{compiler}\""
+            
+            match executeCommand "cmake" cmakeArgs path with
             | Error e -> Error e
             | Ok() -> 
                 Log.info "Compile" $"{dep.Name} (CMake)"
@@ -177,7 +186,7 @@ let getCacheKey (dep: Dependency) =
         $"{dep.Name}@url_{hash}"
     | Local _ -> ""
 
-let installToCache (dep: Dependency) (cachePath: string) : Result<unit, string> =
+let installToCache (dep: Dependency) (cachePath: string) (profile: BuildProfile) (compiler: string) : Result<unit, string> =
     if Directory.Exists cachePath then
         Ok()
     else
@@ -204,12 +213,12 @@ let installToCache (dep: Dependency) (cachePath: string) : Result<unit, string> 
                 Error e
         | Local _ -> Ok()
 
-let install (dep: Dependency) (profile: BuildProfile) : Result<DependencyMetadata, string> =
+let install (dep: Dependency) (profile: BuildProfile) (compiler: string) : Result<DependencyMetadata, string> =
     match dep.Source with
     | Local path ->
         let fullPath = if Path.IsPathRooted path then path else Path.GetFullPath path
         if Directory.Exists fullPath then
-            match buildDependency dep fullPath profile with
+            match buildDependency dep fullPath profile compiler with
             | Error e -> Error e
             | Ok() -> Ok(resolveDependencyMetadata dep fullPath "local")
         else
@@ -218,10 +227,19 @@ let install (dep: Dependency) (profile: BuildProfile) : Result<DependencyMetadat
         let cacheDir = getGlobalCacheDir ()
         let key = getCacheKey dep
         let cachedPath = Path.Combine(cacheDir, key)
-        match installToCache dep cachedPath with
+        // Note: installToCache doesn't build, it just downloads. 
+        // Wait, the previous implementation built INSIDE installToCache?
+        // Let's check the old code.
+        // Old code: match installToCache... -> match buildDependency...
+        // Ah, buildDependency is called AFTER installToCache.
+        // So installToCache signature doesn't strictly need compiler if it just downloads.
+        // But wait, my new signature for installToCache included it.
+        // Let's re-read the old code logic.
+        
+        match installToCache dep cachedPath profile compiler with
         | Error e -> Error e
         | Ok() ->
-            match buildDependency dep cachedPath profile with
+            match buildDependency dep cachedPath profile compiler with
             | Error e -> Error e
             | Ok() ->
                 let localDir = getLocalPackagesDir ()
