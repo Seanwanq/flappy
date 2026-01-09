@@ -1,73 +1,16 @@
 module Flappy.Interactive
 
-open System
-
-let private clearLine () =
-    let currentLine = Console.CursorTop
-    if currentLine >= 0 && currentLine < Console.BufferHeight then
-        Console.SetCursorPosition(0, currentLine)
-        Console.Write(new String(' ', Console.WindowWidth))
-        Console.SetCursorPosition(0, currentLine)
+open Spectre.Console
 
 let select (prompt: string) (options: string list) (defaultIndex: int) : string option =
-    let mutable index = defaultIndex
-    let mutable done' = false
-    let mutable cancelled = false
-    
-    let safeSetCursorVisible visible =
-        try Console.CursorVisible <- visible with | _ -> ()
-
-    let originalCursorVisible = try Console.CursorVisible with | _ -> true
-    safeSetCursorVisible false
-    
-    Console.WriteLine($"{prompt} (Use arrow keys to move, Enter to select, Esc to cancel)")
-    
-    let neededLines = options.Length
-    let mutable startTop = Console.CursorTop
-    
-    if startTop + neededLines >= Console.BufferHeight then
-        let overflow = (startTop + neededLines) - Console.BufferHeight + 1
-        for _ in 1 .. overflow do Console.WriteLine()
-        startTop <- max 0 (Console.CursorTop - neededLines)
-    
-    let draw () =
-        for i in 0 .. options.Length - 1 do
-            let targetTop = startTop + i
-            if targetTop >= 0 && targetTop < Console.BufferHeight then
-                Console.SetCursorPosition(0, targetTop)
-                let opt = options.[i]
-                if i = index then
-                    Console.ForegroundColor <- ConsoleColor.Cyan
-                    Console.Write($"> {opt}".PadRight(Console.WindowWidth - 1))
-                    Console.ResetColor()
-                else
-                    Console.Write($"  {opt}".PadRight(Console.WindowWidth - 1))
-
     try
-        while not done' do
-            draw ()
-            let key = Console.ReadKey(true)
-            match key.Key with
-            | ConsoleKey.UpArrow ->
-                index <- max 0 (index - 1)
-            | ConsoleKey.DownArrow ->
-                index <- min (options.Length - 1) (index + 1)
-            | ConsoleKey.Enter ->
-                done' <- true
-            | ConsoleKey.Escape ->
-                cancelled <- true
-                done' <- true
-            | _ -> ()
-            
-        for i in 0 .. options.Length - 1 do
-            let targetTop = startTop + i
-            if targetTop >= 0 && targetTop < Console.BufferHeight then
-                Console.SetCursorPosition(0, targetTop)
-                clearLine()
+        let promptObj = SelectionPrompt<string>()
+                            .Title(prompt)
+                            .PageSize(10)
+                            .AddChoices(options)
         
-        if startTop >= 0 && startTop < Console.BufferHeight then
-            Console.SetCursorPosition(0, startTop)
-        
-        if cancelled then None else Some options.[index]
-    finally
-        safeSetCursorVisible originalCursorVisible
+        // Invoke the prompt
+        let selection = AnsiConsole.Prompt(promptObj)
+        Some selection
+    with 
+    | _ -> None
