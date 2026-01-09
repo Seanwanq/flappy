@@ -4,7 +4,6 @@ open System
 open System.IO
 open System.Net.Http
 open System.Diagnostics
-open System.Security.Cryptography
 open System.Text
 open System.Runtime.InteropServices
 open System.Threading
@@ -34,11 +33,17 @@ let getLocalPackagesDir () =
         Directory.CreateDirectory dir |> ignore
     dir
 
+/// Pure F# FNV-1a 32-bit hash implementation. 
+/// Used for generating unique cache keys from URLs without dependency on OpenSSL/libssl.
 let computeHash (input: string) =
-    use sha = SHA256.Create()
+    let offsetBasis = 2166136261u
+    let prime = 16777619u
     let bytes = Encoding.UTF8.GetBytes input
-    let hash = sha.ComputeHash bytes
-    BitConverter.ToString(hash).Replace("-", "").ToLower().Substring(0, 12)
+    let mutable hash = offsetBasis
+    for b in bytes do
+        hash <- hash ^^^ (uint32 b)
+        hash <- hash * prime
+    hash.ToString("x8")
 
 let executeCommand (cmd: string) (args: string) (workingDir: string) : Result<unit, string> =
     let psi = ProcessStartInfo(FileName = cmd, Arguments = args, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true)
