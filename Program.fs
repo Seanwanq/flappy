@@ -221,7 +221,10 @@ let ensureProfileDefined (profile: string option) =
             
             let compilerValid = 
                 if isPath then File.Exists compiler
-                else checkCommand compiler
+                else 
+                    let isMsvc = List.contains (compiler.ToLower()) ["cl"; "cl.exe"; "msvc"; "clang-cl"; "lib"]
+                    if isMsvc && (Config.getVsInstallations()).Length > 0 then true
+                    else checkCommand compiler
 
             if config.IsProfileDefined && compilerValid then Ok profile
             else

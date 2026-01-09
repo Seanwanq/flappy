@@ -113,8 +113,8 @@ let prepareBuild (profile: BuildProfile) (targetProfile: string option) : Result
                         
                         let profileFlags = 
                             match profile with 
-                            | Debug -> if isMsvc then "/Zi /Od /MDd /EHsc" else "-g -O0" 
-                            | Release -> if isMsvc then "/O2 /DNDEBUG /MD /EHsc" else "-O3 -DNDEBUG"
+                            | Debug -> if isMsvc then "/Zi /Od /MDd /EHsc /utf-8" else "-g -O0" 
+                            | Release -> if isMsvc then "/O2 /DNDEBUG /MD /EHsc /utf-8" else "-O3 -DNDEBUG"
                         
                         let archFlags = 
                             if isMsvc then "" 
@@ -337,8 +337,8 @@ let buildTest (profile: BuildProfile) (targetProfile: string option) =
                         
                         let profileFlags = 
                             match profile with 
-                            | Debug -> if isMsvc then "/Zi /Od /MDd /EHsc" else "-g -O0" 
-                            | Release -> if isMsvc then "/O2 /DNDEBUG /MD /EHsc" else "-O3 -DNDEBUG"
+                            | Debug -> if isMsvc then "/Zi /Od /MDd /EHsc /utf-8" else "-g -O0" 
+                            | Release -> if isMsvc then "/O2 /DNDEBUG /MD /EHsc /utf-8" else "-O3 -DNDEBUG"
                             
                         let archFlags = 
                             if isMsvc then "" 
