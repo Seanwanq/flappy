@@ -10,10 +10,9 @@ Flappy is a modern, lightweight, and fast C/C++ package manager and build tool w
 -   **Smart Dependencies**: Pull dependencies directly from Git or URLs.
 -   **Automated Testing**: Standardized `flappy test` command for unit tests.
 -   **Editor Integration**: Auto-generates `compile_commands.json` for precise code completion.
--   **Hierarchical Profiles**: Define custom build targets like `[build.arm64]` with platform overrides.
--   **Native AOT**: The tool itself is compiled to a tiny native binary with instant startup.
--   **Visual Studio Integration**: Auto-locates VS installations and configures the environment.
--   **Cross-Platform**: Works seamlessly on Windows, Linux, and macOS.
+-   **CMake-Friendly**: Automatically exports `<Package>Config.cmake` for seamless use in CMake projects.
+-   **Hierarchical Profiles**: Define custom targets like `[build.arm64]` with platform-specific overrides.
+-   **Cross-Platform**: Designed for Windows, Linux (WSL/Nix), and macOS.
 
 ## 🚀 Getting Started
 
@@ -47,22 +46,23 @@ fmt = { git = "https://github.com/fmtlib/fmt", tag = "11.0.2" }
 # Single Header from URL
 stb_image = { url = "https://raw.githubusercontent.com/nothings/stb/master/stb_image.h" }
 
-# Local path
+# Local Flappy or CMake projects
 my_lib = { path = "../my_lib" }
 ```
 
 ## 🛠️ Usage
 
 -   `flappy init [name]`: Start the interactive project wizard.
--   `flappy build [profile]`: Build the current project (or a specific profile).
--   `flappy run [profile]`: Build and run the project executable.
+-   `flappy build [profile]`: Build the project (or a specific profile/target).
+-   `flappy run [profile]`: Build and run the executable.
 -   `flappy test [profile]`: Build and run tests.
--   `flappy compdb`: Manually generate `compile_commands.json`.
+-   `flappy profile add`: Interactively create a new build profile.
+-   `flappy compdb`: Generate compilation database for IDEs.
 -   `flappy cache clean`: Clear the global dependency cache.
 
 ## 📄 Configuration (`flappy.toml`)
 
-Flappy uses a layered configuration system for maximum flexibility:
+Flappy uses a layered configuration system:
 
 ```toml
 [package]
