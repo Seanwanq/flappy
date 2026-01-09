@@ -8,10 +8,12 @@ Flappy is a modern, lightweight, and fast C/C++ package manager and build tool w
 
 -   **Zero-Config Build**: Automatically detects MSVC, GCC, and Clang.
 -   **Smart Dependencies**: Pull dependencies directly from Git or URLs.
--   **Native AOT**: The tool itself is compiled to a tiny (~4MB) native binary with instant startup.
--   **Visual Studio Integration**: Auto-locates VS installations and configures the environment (no more manual `vcvarsall.bat`).
+-   **Automated Testing**: Standardized `flappy test` command for unit tests.
+-   **Editor Integration**: Auto-generates `compile_commands.json` for precise code completion.
+-   **Hierarchical Profiles**: Define custom build targets like `[build.arm64]` with platform overrides.
+-   **Native AOT**: The tool itself is compiled to a tiny native binary with instant startup.
+-   **Visual Studio Integration**: Auto-locates VS installations and configures the environment.
 -   **Cross-Platform**: Works seamlessly on Windows, Linux, and macOS.
--   **Interactive Scaffolding**: Create a new project in seconds with `flappy init`.
 
 ## 🚀 Getting Started
 
@@ -25,8 +27,6 @@ cd flappy
 just install
 ```
 
-This will build Flappy as a native binary and install it to `~/.local/bin` (ensure this directory is in your `PATH`).
-
 ### Create a New Project
 
 ```bash
@@ -35,8 +35,6 @@ cd my_project
 flappy run
 ```
 
-This will create a new C++ project, compile the boilerplate code, and run it.
-
 ## 📦 Dependency Management
 
 Add dependencies to your `flappy.toml`:
@@ -44,7 +42,7 @@ Add dependencies to your `flappy.toml`:
 ```toml
 [dependencies]
 # From Git
-nlohmann_json = { git = "https://github.com/nlohmann/json", tag = "v3.11.2" }
+fmt = { git = "https://github.com/fmtlib/fmt", tag = "11.0.2" }
 
 # Single Header from URL
 stb_image = { url = "https://raw.githubusercontent.com/nothings/stb/master/stb_image.h" }
@@ -53,29 +51,37 @@ stb_image = { url = "https://raw.githubusercontent.com/nothings/stb/master/stb_i
 my_lib = { path = "../my_lib" }
 ```
 
-Flappy automatically handles downloading, caching, and adding the correct `include` paths to your compiler.
-
 ## 🛠️ Usage
 
 -   `flappy init [name]`: Start the interactive project wizard.
--   `flappy build`: Build the current project.
--   `flappy run`: Build and run the project executable.
+-   `flappy build [profile]`: Build the current project (or a specific profile).
+-   `flappy run [profile]`: Build and run the project executable.
+-   `flappy test [profile]`: Build and run tests.
+-   `flappy compdb`: Manually generate `compile_commands.json`.
 -   `flappy cache clean`: Clear the global dependency cache.
 
 ## 📄 Configuration (`flappy.toml`)
+
+Flappy uses a layered configuration system for maximum flexibility:
 
 ```toml
 [package]
 name = "hello_world"
 version = "0.1.0"
-authors = ["Your Name"]
 
 [build]
-compiler = "cl"        # or g++, clang++
-standard = "c++20"     # c++11, c++14, c++17, c++20, c++23
-arch = "x64"           # x64, x86, arm64
-type = "exe"           # exe, dll
+language = "c++"
+standard = "c++20"
 output = "bin/hello"
+type = "exe"
+
+[build.windows]
+compiler = "cl"
+arch = "x64"
+
+[build.linux]
+compiler = "g++"
+arch = "arm64"
 ```
 
 ## 🏗️ Project Structure
