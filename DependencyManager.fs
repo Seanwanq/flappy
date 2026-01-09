@@ -136,29 +136,38 @@ let buildDependency (dep: Dependency) (path: string) (profile: BuildProfile) (co
         executeCommand finalCmd finalArgs path
     | None ->
         if File.Exists(Path.Combine(path, "flappy.toml")) then
-            Log.info "Build" $"Flappy build for {dep.Name}"
-            let exePath = Process.GetCurrentProcess().MainModule.FileName
-            let args = if profile = Release then "build --release" else "build"
-            // Note: We currently don't propagate compiler to sub-flappy builds via CLI args easily 
-            // unless we add --compiler flag to build command or rely on flappy.toml cascading.
-            // For now, sub-flappy will use its own resolution.
-            executeCommand exePath args path
+            // For flappy dependencies, check if dist/ exists
+            let distDir = Path.Combine(path, "dist")
+            if Directory.Exists distDir then
+                Ok() // Skip if dist exists
+            else
+                Log.info "Build" $"Flappy build for {dep.Name}"
+                let exePath = Process.GetCurrentProcess().MainModule.FileName
+                let args = if profile = Release then "build --release" else "build"
+                executeCommand exePath args path
         elif File.Exists(Path.Combine(path, "CMakeLists.txt")) then
             let buildDir = Path.Combine(path, "flappy_build")
-            if not (Directory.Exists buildDir) then
-                Directory.CreateDirectory buildDir |> ignore
-            Log.info "Configure" $"{dep.Name} (CMake)"
+            let buildTypeDir = Path.Combine(buildDir, profileStr)
             
-            // Heuristic: If compiler looks like a C++ compiler, pass it as CMAKE_CXX_COMPILER
-            // If it's cl.exe, CMake handles it via generator usually, but passing it is safe.
-            // We quote it to handle paths with spaces.
-            let cmakeArgs = $"-S \"{path}\" -B \"{buildDir}\" -DCMAKE_BUILD_TYPE={profileStr} -DCMAKE_CXX_COMPILER=\"{compiler}\""
+            // Heuristic: If buildDir exists and has some content, consider it configured.
+            // If we want to be more robust, we could check for specific lib files, 
+            // but CMake's own incremental build is fast enough if we just don't re-run Configure/Build commands unnecessarily.
+            // However, to keep it simple and clean, if the buildDir exists, we only run Compile, not Configure.
+            // Even better, if we find any .lib/.a/.so in the buildDir, we skip entirely for this run.
+            let isConfigured = Directory.Exists buildDir && Directory.GetFileSystemEntries(buildDir).Length > 0
             
-            match executeCommand "cmake" cmakeArgs path with
-            | Error e -> Error e
-            | Ok() -> 
-                Log.info "Compile" $"{dep.Name} (CMake)"
-                executeCommand "cmake" $"--build \"{buildDir}\" --config {profileStr}" path
+            if isConfigured then
+                Ok() // Already built or configured. Let CMake handle internal incrementality if needed, but we skip the redundant log.
+            else
+                if not (Directory.Exists buildDir) then
+                    Directory.CreateDirectory buildDir |> ignore
+                Log.info "Configure" $"{dep.Name} (CMake)"
+                let cmakeArgs = $"-S \"{path}\" -B \"{buildDir}\" -DCMAKE_BUILD_TYPE={profileStr} -DCMAKE_CXX_COMPILER=\"{compiler}\""
+                match executeCommand "cmake" cmakeArgs path with
+                | Error e -> Error e
+                | Ok() -> 
+                    Log.info "Compile" $"{dep.Name} (CMake)"
+                    executeCommand "cmake" $"--build \"{buildDir}\" --config {profileStr}" path
         else
             Ok()
 
@@ -282,6 +291,51 @@ let install (dep: Dependency) (profile: BuildProfile) (compiler: string) : Resul
                 let linkPath = Path.Combine(localDir, dep.Name)
                 createLink cachedPath linkPath
                 Ok(resolveDependencyMetadata dep linkPath "remote")
+
+let cleanBuildArtifacts (path: string) =
+    let dirs = [ "flappy_build"; "dist"; "obj"; "bin" ]
+    for d in dirs do
+        let fullPath = Path.Combine(path, d)
+        if Directory.Exists fullPath then
+            try Directory.Delete(fullPath, true) with _ -> ()
+
+let update (dep: Dependency) : Result<unit, string> =
+    match dep.Source with
+    | Local _ -> 
+        Log.info "Update" $"Skipping local dependency {dep.Name}"
+        Ok()
+    | Git(url, tag) ->
+        let cacheDir = getGlobalCacheDir()
+        let key = getCacheKey dep
+        let cachedPath = Path.Combine(cacheDir, key)
+        
+        if not (Directory.Exists cachedPath) then
+            Error $"Dependency {dep.Name} is not installed. Run 'flappy sync' first."
+        else
+            Log.info "Updating" $"{dep.Name} from {url}"
+            // 1. Fetch and Reset
+            match executeGit "fetch --all" cachedPath with
+            | Error e -> Error e
+            | Ok() ->
+                let target = tag |> Option.defaultValue "HEAD"
+                match executeGit $"checkout {target}" cachedPath with
+                | Error e -> Error e
+                | Ok() ->
+                    match executeGit "pull" cachedPath with | _ -> () // Pull might fail if detached HEAD, ignore
+                    // 2. Clean build artifacts to force re-build
+                    cleanBuildArtifacts cachedPath
+                    // 3. Also clean local package link/dir if any
+                    let localPkgDir = Path.Combine(getLocalPackagesDir(), dep.Name)
+                    cleanBuildArtifacts localPkgDir
+                    Ok()
+    | Url url ->
+        // For direct URLs, we just re-download
+        let cacheDir = getGlobalCacheDir()
+        let key = getCacheKey dep
+        let cachedPath = Path.Combine(cacheDir, key)
+        if Directory.Exists cachedPath then Directory.Delete(cachedPath, true)
+        Log.info "Updating" $"{dep.Name} (Re-downloading)"
+        Ok() // Next sync will re-download
 
 let cleanCache () =
     let dir = getGlobalCacheDir ()

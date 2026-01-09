@@ -59,7 +59,8 @@ type DependencyMetadata =
 type TestConfig = 
     { Sources: string list
       Output: string
-      Defines: string list }
+      Defines: string list
+      Flags: string list }
 
 type FlappyConfig = 
     { Package: PackageConfig
@@ -224,6 +225,7 @@ let parse (tomlContent: string) (profileOverride: string option) : Result<Flappy
                     Sources = getList "sources" test
                     Output = getString "output" test "bin/test_runner"
                     Defines = getList "defines" test
+                    Flags = getList "flags" test
                 }
             | None -> None
 

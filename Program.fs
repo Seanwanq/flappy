@@ -346,14 +346,16 @@ let main args =
                 match otherArgs |> List.tryFindIndex (fun x -> x = "--") with
                 | Some idx -> otherArgs |> List.skip (idx + 1) |> String.concat " "
                 | None -> ""
+            
+            // Generate compdb BEFORE running (or as part of build)
+            match Flappy.Generator.generate profileArg with
+            | Ok () -> ()
+            | Error e -> Log.warn "CompDB" ("Failed to update compile_commands.json: " + e)
+
             let sw = Diagnostics.Stopwatch.StartNew()
             match run profile extraArgs profileArg with
             | Ok () -> 
                 sw.Stop()
-                // Auto-generate compilation database
-                match Flappy.Generator.generate profileArg with
-                | Ok () -> ()
-                | Error e -> Log.warn "CompDB" ("Failed to update compile_commands.json: " + e)
                 0
             | Error e ->
                 Console.Error.WriteLine($"Run failed: {e}")
@@ -381,6 +383,37 @@ let main args =
             | Error e ->
                 Console.Error.WriteLine($"Test failed: {e}")
                 1
+    | "update" :: tail ->
+        if not (File.Exists "flappy.toml") then
+            Log.error "Error" "flappy.toml not found."
+            1
+        else
+            let content = File.ReadAllText "flappy.toml"
+            match Config.parse content None with
+            | Error e -> Log.error "Error" e; 1
+            | Ok config ->
+                let targetName = match tail with | name :: _ -> Some name | [] -> None
+                let depsToUpdate = 
+                    match targetName with
+                    | Some name -> config.Dependencies |> List.filter (fun d -> d.Name = name)
+                    | None -> config.Dependencies
+                
+                if depsToUpdate.IsEmpty then
+                    Log.warn "Update" "No matching dependencies found to update."
+                    0
+                else
+                    let mutable success = true
+                    for dep in depsToUpdate do
+                        match Flappy.DependencyManager.update dep with
+                        | Ok() -> ()
+                        | Error e -> Log.error "Failed" e; success <- false
+                    
+                    if success then
+                        Log.info "Success" "Dependencies updated. Re-syncing..."
+                        match sync() with
+                        | Ok () -> 0
+                        | Error e -> Log.error "Sync Failed" e; 1
+                    else 1
     | "compdb" :: tail ->
         let profileArg, otherArgs = 
             match tail with
@@ -500,6 +533,7 @@ let main args =
         Console.WriteLine("    --define, -D <macro>")
         Console.WriteLine("  remove <name>         Remove a dependency (alias: rm)")
         Console.WriteLine("  sync                  Install dependencies and update flappy.lock")
+        Console.WriteLine("  update [name]         Update dependency to latest version and re-build")
         Console.WriteLine("  build [profile]       Build the project")
         Console.WriteLine("    --release           Build in release mode")
         Console.WriteLine("    --target, -t <name> Specify build profile/target")

@@ -350,7 +350,7 @@ let buildTest (profile: BuildProfile) (targetProfile: string option) =
                         
                         let includeFlags = if isMsvc then includePaths |> List.map (fun p -> "/I\"" + p + "\"") |> String.concat " " else includePaths |> List.map (fun p -> "-I\"" + p + "\"") |> String.concat " "
                         let defineFlags = if isMsvc then allDefines |> List.map (fun d -> "/D" + d) |> String.concat " " else allDefines |> List.map (fun d -> "-D" + d) |> String.concat " "
-                        let customFlags = config.Build.Flags |> String.concat " "
+                        let customFlags = (config.Build.Flags @ testConfig.Flags) |> String.concat " "
 
                         // 3. Compile
                         let compileFile (src: string) = async {
