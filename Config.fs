@@ -413,6 +413,17 @@ let getVcVarsAllPath (vsPath: string) =
     let path = Path.Combine(vsPath, "VC", "Auxiliary", "Build", "vcvarsall.bat")
     if File.Exists path then Some path else None
 
+let findProjectRoot (startDir: string) =
+    let mutable current = DirectoryInfo(startDir)
+    let mutable found = None
+    while not (isNull current) && found.IsNone do
+        let configFile = Path.Combine(current.FullName, "flappy.toml")
+        if File.Exists configFile then
+            found <- Some current.FullName
+        else
+            current <- current.Parent
+    found
+
 let tryGetVsRoot (path: string) =
     let mutable current = if File.Exists path then Path.GetDirectoryName(path) else path
     let mutable found = None

@@ -276,6 +276,18 @@ let parseInitArgs (args: string list) =
 [<EntryPoint>]
 let main args =
     let argsList = args |> Array.toList
+    
+    // Auto-detect project root for project-related commands
+    let projectCommands = ["build"; "run"; "test"; "sync"; "update"; "add"; "remove"; "rm"; "clean"; "compdb"; "xplat"; "profile"]
+    match argsList with
+    | cmd :: _ when List.contains cmd projectCommands ->
+        match Config.findProjectRoot (Directory.GetCurrentDirectory()) with
+        | Some root -> 
+            if root <> Directory.GetCurrentDirectory() then
+                Directory.SetCurrentDirectory(root)
+        | None -> () // Fallback to current dir, commands will fail gracefully if flappy.toml is missing
+    | _ -> ()
+
     match argsList with
     | "init" :: tail ->
         let isFlag (s: string) = s.StartsWith("-")

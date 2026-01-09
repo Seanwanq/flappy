@@ -125,7 +125,7 @@ let downloadFile (url: string) (destPath: string) =
     with ex -> Error ex.Message
 
 let buildDependency (dep: Dependency) (path: string) (profile: BuildProfile) (compiler: string) =
-    let profileStr = match profile with Debug -> "Debug" | Release -> "Release"
+    let profileStr = match profile with Debug -> "debug" | Release -> "release"
     match dep.BuildCmd with
     | Some cmd ->
         Log.info "Build" $"Custom command for {dep.Name}"
@@ -136,38 +136,37 @@ let buildDependency (dep: Dependency) (path: string) (profile: BuildProfile) (co
         executeCommand finalCmd finalArgs path
     | None ->
         if File.Exists(Path.Combine(path, "flappy.toml")) then
-            // For flappy dependencies, check if dist/ exists
-            let distDir = Path.Combine(path, "dist")
-            if Directory.Exists distDir then
-                Ok() // Skip if dist exists
-            else
-                Log.info "Build" $"Flappy build for {dep.Name}"
-                let exePath = Process.GetCurrentProcess().MainModule.FileName
-                let args = if profile = Release then "build --release" else "build"
-                executeCommand exePath args path
+            // Sub-flappy handles its own incremental build via obj/<arch>/<profile>
+            // We just need to trigger it.
+            Log.info "Build" $"Flappy build for {dep.Name}"
+            let exePath = Process.GetCurrentProcess().MainModule.FileName
+            let args = if profile = Release then "build --release" else "build"
+            executeCommand exePath args path
         elif File.Exists(Path.Combine(path, "CMakeLists.txt")) then
-            let buildDir = Path.Combine(path, "flappy_build")
-            let buildTypeDir = Path.Combine(buildDir, profileStr)
+            // ISOLATION: Each profile gets its own build directory
+            let buildDir = Path.Combine(path, "flappy_build", profileStr)
             
-            // Heuristic: If buildDir exists and has some content, consider it configured.
-            // If we want to be more robust, we could check for specific lib files, 
-            // but CMake's own incremental build is fast enough if we just don't re-run Configure/Build commands unnecessarily.
-            // However, to keep it simple and clean, if the buildDir exists, we only run Compile, not Configure.
-            // Even better, if we find any .lib/.a/.so in the buildDir, we skip entirely for this run.
-            let isConfigured = Directory.Exists buildDir && Directory.GetFileSystemEntries(buildDir).Length > 0
-            
-            if isConfigured then
-                Ok() // Already built or configured. Let CMake handle internal incrementality if needed, but we skip the redundant log.
+            // Check if already built for this specific profile
+            let libExts = if RuntimeInformation.IsOSPlatform(OSPlatform.Windows) then [ "*.lib"; "*.a" ] else [ "*.a"; "*.so"; "*.dylib" ]
+            let hasLibs = 
+                if Directory.Exists buildDir then
+                    libExts |> List.exists (fun p -> Directory.GetFiles(buildDir, p, SearchOption.AllDirectories).Length > 0)
+                else false
+
+            if hasLibs then
+                Ok() // Skip: Already built for this profile
             else
                 if not (Directory.Exists buildDir) then
                     Directory.CreateDirectory buildDir |> ignore
-                Log.info "Configure" $"{dep.Name} (CMake)"
-                let cmakeArgs = $"-S \"{path}\" -B \"{buildDir}\" -DCMAKE_BUILD_TYPE={profileStr} -DCMAKE_CXX_COMPILER=\"{compiler}\""
+                Log.info "Configure" $"{dep.Name} (CMake {profileStr})"
+                
+                let cmakeBuildType = if profile = Release then "Release" else "Debug"
+                let cmakeArgs = $"-S \"{path}\" -B \"{buildDir}\" -DCMAKE_BUILD_TYPE={cmakeBuildType} -DCMAKE_CXX_COMPILER=\"{compiler}\""
                 match executeCommand "cmake" cmakeArgs path with
                 | Error e -> Error e
                 | Ok() -> 
-                    Log.info "Compile" $"{dep.Name} (CMake)"
-                    executeCommand "cmake" $"--build \"{buildDir}\" --config {profileStr}" path
+                    Log.info "Compile" $"{dep.Name} (CMake {profileStr})"
+                    executeCommand "cmake" $"--build \"{buildDir}\" --config {cmakeBuildType}" path
         else
             Ok()
 
