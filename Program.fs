@@ -9,6 +9,7 @@ open Flappy.Builder
 open Flappy.GlobalConfig
 open Flappy.Toolchain
 open Flappy.Interactive
+open Spectre.Console
 
 let getOrSetupCompiler () =
     match loadConfig() with
@@ -130,17 +131,109 @@ let runXPlatWizard () =
             match compilerResult with
             | None -> 0
             | Some compiler ->
-                let standards = ["c++17"; "c++20"; "c++23"; "c++14"; "c++11"; "c11"; "c17"; "c99"]
-                match select $"Select standard for {platform}:" standards 0 with
-                | None -> 0
-                | Some std ->
-                    match Config.updatePlatformConfig "flappy.toml" platform compiler std with
-                    | Ok () -> 
-                        Log.info "Success" $"Updated flappy.toml with {platform} configuration."
-                        0
-                    | Error e -> 
-                        Log.error "Failed" $"Failed to update config: {e}"
-                        1
+                match Config.updateProfileConfig "flappy.toml" platform None compiler with
+                | Ok () -> 
+                    Log.info "Success" $"Updated flappy.toml with {platform} configuration."
+                    0
+                | Error e -> 
+                    Log.error "Failed" $"Failed to update config: {e}"
+                    1
+
+let interactiveConfigure (platform: string) =
+    let currentPlatform =
+        if RuntimeInformation.IsOSPlatform(OSPlatform.Windows) then "windows"
+        elif RuntimeInformation.IsOSPlatform(OSPlatform.Linux) then "linux"
+        elif RuntimeInformation.IsOSPlatform(OSPlatform.OSX) then "macos"
+        else "unknown"
+    
+    let compilerResult =
+        if platform = currentPlatform then
+            let toolchains = getAvailableToolchains()
+            if toolchains.IsEmpty then
+                AnsiConsole.Ask<string>($"No compilers found. Enter command for [cyan]{platform}[/]:")
+                |> Some
+            else
+                let opts = toolchains |> List.map (fun t -> t.Command)
+                select $"Select compiler for {platform}:" opts 0
+        else
+            let suggestions =
+                match platform with 
+                | "windows" -> ["cl"; "clang-cl"; "g++"]
+                | "linux" -> ["g++"; "clang++"]
+                | "macos" -> ["clang++"; "g++"]
+                | _ -> []
+            let opts = suggestions @ ["(Enter custom command)"]
+            match select $"Choose a compiler for {platform}:" opts 0 with
+            | None -> None
+            | Some choice when choice.Contains("custom") ->
+                AnsiConsole.Ask<string>($"Enter compiler command for [cyan]{platform}[/]:")
+                |> Some
+            | Some choice -> Some choice
+    
+    match compilerResult with
+    | None -> Error "Configuration cancelled."
+    | Some compiler ->
+        match Config.updateProfileConfig "flappy.toml" platform None compiler with
+        | Ok () -> 
+            Log.info "Success" $"Updated flappy.toml with {platform} configuration."
+            Ok ()
+        | Error e -> Error e
+
+let runProfileWizard () =
+    if not (File.Exists "flappy.toml") then
+        Log.error "Error" "No flappy.toml found."
+        1
+    else
+        let name = AnsiConsole.Ask<string>("Enter Profile Name (e.g. [green]rpi-arm64[/]):")
+        let platforms = ["windows"; "linux"; "macos"; "any"]
+        match select "Select target platform for this profile:" platforms 0 with
+        | None -> 0
+        | Some platform ->
+            let platArg = if platform = "any" then None else Some platform
+            let toolchains = getAvailableToolchains()
+            let compilerResult =
+                if toolchains.IsEmpty then
+                    AnsiConsole.Ask<string>($"Enter compiler command for [cyan]{name}[/]:") |> Some
+                else
+                    let opts = toolchains |> List.map (fun t -> t.Command)
+                    select $"Select compiler for {name} ({platform}):" opts 0
+            
+            match compilerResult with
+            | None -> 0
+            | Some compiler ->
+                match Config.updateProfileConfig "flappy.toml" name platArg compiler with
+                | Ok () ->
+                    Log.info "Success" $"Added profile '[cyan]{name}[/]' to flappy.toml."
+                    0
+                | Error e ->
+                    Log.error "Error" e
+                    1
+
+let ensureProfileDefined (profile: string option) =
+    if not (File.Exists "flappy.toml") then Error "flappy.toml not found."
+    else
+        let content = File.ReadAllText "flappy.toml"
+        match Config.parse content profile with
+        | Error e -> Error e
+        | Ok config ->
+            if config.IsProfileDefined then Ok profile
+            else
+                let target = 
+                    match profile with
+                    | Some p -> p
+                    | None ->
+                        if RuntimeInformation.IsOSPlatform(OSPlatform.Windows) then "windows"
+                        elif RuntimeInformation.IsOSPlatform(OSPlatform.Linux) then "linux"
+                        elif RuntimeInformation.IsOSPlatform(OSPlatform.OSX) then "macos"
+                        else "unknown"
+                
+                AnsiConsole.MarkupLine($"[yellow]Warning:[/] No configuration found for profile/platform '[cyan]{target}[/]'.")
+                if AnsiConsole.Confirm("Would you like to configure it now?") then
+                    match interactiveConfigure target with
+                    | Ok () -> Ok profile
+                    | Error e -> Error e
+                else
+                    Error "Build cancelled by user."
 
 let parseInitArgs (args: string list) =
     let rec parse (opts: Map<string, string>) (rest: string list) =
@@ -195,66 +288,84 @@ let main args =
     | "build" :: tail ->
         let profileArg, otherArgs = 
             match tail with
+            | "-t" :: t :: rest | "--target" :: t :: rest -> Some t, rest
             | head :: rest when not (head.StartsWith("-")) -> Some head, rest
             | _ -> None, tail
         
-        let profile = if List.contains "--release" otherArgs then Release else Debug
-        let sw = Diagnostics.Stopwatch.StartNew()
-        match build profile profileArg with
-        | Ok () -> 
-            sw.Stop()
-            let profileName = if profile = Release then "release" else "dev"
-            Log.info "Finished" $"{profileName} target(s) in {sw.Elapsed.TotalSeconds:F2}s"
-            
-            // Auto-generate compilation database
-            match Flappy.Generator.generate profileArg with
-            | Ok () -> ()
-            | Error e -> Log.warn "CompDB" ("Failed to update compile_commands.json: " + e)
-            
-            0
+        match ensureProfileDefined profileArg with
         | Error e -> 
-            Console.Error.WriteLine($"Build failed: {e}")
+            if e <> "Build cancelled by user." then Console.Error.WriteLine(e)
             1
+        | Ok profileArg ->
+            let profile = if List.contains "--release" otherArgs then Release else Debug
+            let sw = Diagnostics.Stopwatch.StartNew()
+            match build profile profileArg with
+            | Ok () -> 
+                sw.Stop()
+                let profileName = if profile = Release then "release" else "dev"
+                Log.info "Finished" $"{profileName} target(s) in {sw.Elapsed.TotalSeconds:F2}s"
+                
+                // Auto-generate compilation database
+                match Flappy.Generator.generate profileArg with
+                | Ok () -> ()
+                | Error e -> Log.warn "CompDB" ("Failed to update compile_commands.json: " + e)
+                
+                0
+            | Error e -> 
+                Console.Error.WriteLine($"Build failed: {e}")
+                1
     | "run" :: tail ->
         let profileArg, otherArgs = 
             match tail with
+            | "-t" :: t :: rest | "--target" :: t :: rest -> Some t, rest
             | head :: rest when not (head.StartsWith("-")) -> Some head, rest
             | _ -> None, tail
 
-        let profile = if List.contains "--release" otherArgs then Release else Debug
-        let extraArgs =
-            match otherArgs |> List.tryFindIndex (fun x -> x = "--") with
-            | Some idx -> otherArgs |> List.skip (idx + 1) |> String.concat " "
-            | None -> ""
-        let sw = Diagnostics.Stopwatch.StartNew()
-        match run profile extraArgs profileArg with
-        | Ok () -> 
-            sw.Stop()
-            // Auto-generate compilation database
-            match Flappy.Generator.generate profileArg with
-            | Ok () -> ()
-            | Error e -> Log.warn "CompDB" ("Failed to update compile_commands.json: " + e)
-            0
-        | Error e ->
-            Console.Error.WriteLine($"Run failed: {e}")
+        match ensureProfileDefined profileArg with
+        | Error e -> 
+            if e <> "Build cancelled by user." then Console.Error.WriteLine(e)
             1
+        | Ok profileArg ->
+            let profile = if List.contains "--release" otherArgs then Release else Debug
+            let extraArgs =
+                match otherArgs |> List.tryFindIndex (fun x -> x = "--") with
+                | Some idx -> otherArgs |> List.skip (idx + 1) |> String.concat " "
+                | None -> ""
+            let sw = Diagnostics.Stopwatch.StartNew()
+            match run profile extraArgs profileArg with
+            | Ok () -> 
+                sw.Stop()
+                // Auto-generate compilation database
+                match Flappy.Generator.generate profileArg with
+                | Ok () -> ()
+                | Error e -> Log.warn "CompDB" ("Failed to update compile_commands.json: " + e)
+                0
+            | Error e ->
+                Console.Error.WriteLine($"Run failed: {e}")
+                1
     | "test" :: tail ->
         let profileArg, otherArgs = 
             match tail with
+            | "-t" :: t :: rest | "--target" :: t :: rest -> Some t, rest
             | head :: rest when not (head.StartsWith("-")) -> Some head, rest
             | _ -> None, tail
 
-        let profile = if List.contains "--release" otherArgs then Release else Debug
-        let extraArgs =
-            match otherArgs |> List.tryFindIndex (fun x -> x = "--") with
-            | Some idx -> otherArgs |> List.skip (idx + 1) |> String.concat " "
-            | None -> ""
-        let sw = Diagnostics.Stopwatch.StartNew()
-        match runTest profile extraArgs profileArg with
-        | Ok () -> sw.Stop(); 0
-        | Error e ->
-            Console.Error.WriteLine($"Test failed: {e}")
+        match ensureProfileDefined profileArg with
+        | Error e -> 
+            if e <> "Build cancelled by user." then Console.Error.WriteLine(e)
             1
+        | Ok profileArg ->
+            let profile = if List.contains "--release" otherArgs then Release else Debug
+            let extraArgs =
+                match otherArgs |> List.tryFindIndex (fun x -> x = "--") with
+                | Some idx -> otherArgs |> List.skip (idx + 1) |> String.concat " "
+                | None -> ""
+            let sw = Diagnostics.Stopwatch.StartNew()
+            match runTest profile extraArgs profileArg with
+            | Ok () -> sw.Stop(); 0
+            | Error e ->
+                Console.Error.WriteLine($"Test failed: {e}")
+                1
     | "compdb" :: tail ->
         let profileArg, otherArgs = 
             match tail with
@@ -265,6 +376,8 @@ let main args =
         | Error e ->
             Console.Error.WriteLine($"CompDB failed: {e}")
             1
+    | ["profile"; "add"] ->
+        runProfileWizard ()
     | ["xplat"] ->
         runXPlatWizard ()
     | ["clean"] ->
@@ -379,9 +492,16 @@ let main args =
         Console.WriteLine("    --define, -D <macro>")
         Console.WriteLine("  remove <name>         Remove a dependency (alias: rm)")
         Console.WriteLine("  sync                  Install dependencies and update flappy.lock")
-        Console.WriteLine("  build [--release]     Build the project")
-        Console.WriteLine("  run [--release]       Build and run the project")
-        Console.WriteLine("  test [--release]      Build and run tests")
+        Console.WriteLine("  build [profile]       Build the project")
+        Console.WriteLine("    --release           Build in release mode")
+        Console.WriteLine("    --target, -t <name> Specify build profile/target")
+        Console.WriteLine("  run [profile]         Build and run the project")
+        Console.WriteLine("    --release           Run in release mode")
+        Console.WriteLine("    --target, -t <name> Specify build profile/target")
+        Console.WriteLine("  test [profile]        Build and run tests")
+        Console.WriteLine("    --release           Test in release mode")
+        Console.WriteLine("    --target, -t <name> Specify build profile/target")
+        Console.WriteLine("  profile add           Add a custom build profile (interactive)")
         Console.WriteLine("  compdb [profile]      Generate compilation database (compile_commands.json)")
         Console.WriteLine("  xplat                 Configure toolchains for other platforms")
         Console.WriteLine("  clean                 Remove build artifacts (bin/ and obj/)")

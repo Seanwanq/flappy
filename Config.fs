@@ -64,7 +64,8 @@ type FlappyConfig =
     { Package: PackageConfig
       Build: BuildConfig
       Test: TestConfig option
-      Dependencies: Dependency list }
+      Dependencies: Dependency list
+      IsProfileDefined: bool }
 
 type LockEntry = 
     { Name: string
@@ -118,6 +119,7 @@ let defaultConfig =
             }
         Test = None
         Dependencies = []
+        IsProfileDefined = false
     }
 
 let parse (tomlContent: string) (profileOverride: string option) : Result<FlappyConfig, string> =
@@ -168,6 +170,7 @@ let parse (tomlContent: string) (profileOverride: string option) : Result<Flappy
               Defines = baseCfg.Defines @ (getList "defines" overrides)
               Flags = baseCfg.Flags @ (getList "flags" overrides) }
 
+        let mutable wasProfileDefined = false
         let buildConfig =
             match getTable "build" model with
             | Some build ->
@@ -194,16 +197,23 @@ let parse (tomlContent: string) (profileOverride: string option) : Result<Flappy
                     // Flow: Base -> Profile -> Profile.Platform
                     match getTable profile build with
                     | Some profTable ->
+                        wasProfileDefined <- true
                         let profCfg = merge baseCfg profTable
                         match getTable platformKey profTable with
                         | Some profPlatTable -> merge profCfg profPlatTable
                         | None -> profCfg
-                    | None -> baseCfg // Profile not found, fallback to base? Or error? Fallback for now.
+                    | None -> 
+                        wasProfileDefined <- false
+                        baseCfg
                 | None ->
                     // Flow: Base -> Platform
                     match getTable platformKey build with
-                    | Some platTable -> merge baseCfg platTable
-                    | None -> baseCfg
+                    | Some platTable -> 
+                        wasProfileDefined <- true
+                        merge baseCfg platTable
+                    | None -> 
+                        wasProfileDefined <- false
+                        baseCfg
             | None -> { defaultConfig.Build with Defines = []; Flags = [] }
 
         let testConfig =
@@ -242,7 +252,7 @@ let parse (tomlContent: string) (profileOverride: string option) : Result<Flappy
                 |> Seq.toList
             | None -> []
 
-        Ok { Package = packageConfig; Build = buildConfig; Test = testConfig; Dependencies = dependencies }
+        Ok { Package = packageConfig; Build = buildConfig; Test = testConfig; Dependencies = dependencies; IsProfileDefined = wasProfileDefined }
     with ex -> Error ex.Message
 
 let formatToml (content: string) =
@@ -254,14 +264,14 @@ let formatToml (content: string) =
     let formatted = Regex.Replace(collapsed, @"\n(\[)", "\n\n$1")
     formatted.Trim() + "\n"
 
-let updatePlatformConfig (filePath: string) (platform: string) (compiler: string) (std: string) : Result<unit, string> =
+let updateProfileConfig (filePath: string) (profile: string) (platform: string option) (compiler: string) : Result<unit, string> =
     try
         if not (File.Exists filePath) then Error "flappy.toml not found."
         else
             let content = File.ReadAllText filePath
             let model = Toml.ToModel content
             
-            // Get or create the build table
+            // 1. Get or create the 'build' table
             let buildTable = 
                 if model.ContainsKey("build") && model.["build"] :? TomlTable then
                     model.["build"] :?> TomlTable
@@ -270,17 +280,29 @@ let updatePlatformConfig (filePath: string) (platform: string) (compiler: string
                     model.["build"] <- t
                     t
             
-            // Get or create the platform sub-table
-            let platformTable = 
-                if buildTable.ContainsKey(platform) && buildTable.[platform] :? TomlTable then
-                    buildTable.[platform] :?> TomlTable
+            // 2. Get or create the profile table (e.g. [build.myprofile] or [build.windows])
+            let profileTable =
+                if buildTable.ContainsKey(profile) && buildTable.[profile] :? TomlTable then
+                    buildTable.[profile] :?> TomlTable
                 else
                     let t = TomlTable()
-                    buildTable.[platform] <- t
+                    buildTable.[profile] <- t
                     t
             
-            platformTable.["compiler"] <- compiler
-            platformTable.["standard"] <- std
+            match platform with
+            | Some plat ->
+                // 3. Get or create the platform sub-table (e.g. [build.myprofile.windows])
+                let platformTable =
+                    if profileTable.ContainsKey(plat) && profileTable.[plat] :? TomlTable then
+                        profileTable.[plat] :?> TomlTable
+                    else
+                        let t = TomlTable()
+                        profileTable.[plat] <- t
+                        t
+                platformTable.["compiler"] <- compiler
+            | None ->
+                // No platform, set compiler directly in profile
+                profileTable.["compiler"] <- compiler
             
             let newContent = Toml.FromModel(model)
             File.WriteAllText(filePath, formatToml newContent)
