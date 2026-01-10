@@ -55,7 +55,7 @@ let sync () =
     if not (File.Exists "flappy.toml") then Error "flappy.toml not found."
     else
         let content = File.ReadAllText "flappy.toml"
-        match Config.parse content None with
+        match Config.parse content None Debug with
         | Error e -> Error ("Failed to parse configuration: " + e)
         | Ok config ->
             Log.info "Syncing" ("[" + config.Package.Name + "]")
@@ -92,7 +92,7 @@ let prepareBuild (profile: BuildProfile) (targetProfile: string option) (skipDep
     if not (File.Exists "flappy.toml") then Error "flappy.toml not found."
     else
         let content = File.ReadAllText "flappy.toml"
-        match Config.parse content targetProfile with
+        match Config.parse content targetProfile profile with
         | Error e -> Error ("Failed to parse configuration: " + e)
         | Ok config ->
             if not (Directory.Exists "src") then Error "src directory not found."
@@ -295,7 +295,7 @@ let run (profile: BuildProfile) (extraArgs: string) (targetProfile: string optio
     | Error e -> Error e
     | Ok () ->
         let content = File.ReadAllText "flappy.toml"
-        match Config.parse content targetProfile with
+        match Config.parse content targetProfile profile with
         | Ok config ->
             let exePath = if Environment.OSVersion.Platform = PlatformID.Win32NT then (if config.Build.Type = "dll" || config.Build.Type = "shared" then "" elif not (config.Build.Output.EndsWith(".exe")) then config.Build.Output + ".exe" else config.Build.Output) else config.Build.Output
             if String.IsNullOrEmpty exePath || not (File.Exists exePath) then (if config.Build.Type = "exe" then Error ("Executable not found: " + exePath) else Log.info "Skipping" "Output is a library."; Ok ()) 
@@ -306,7 +306,7 @@ let buildTest (profile: BuildProfile) (targetProfile: string option) (skipDeps: 
     if not (File.Exists "flappy.toml") then Error "flappy.toml not found."
     else
         let content = File.ReadAllText "flappy.toml"
-        match Config.parse content targetProfile with
+        match Config.parse content targetProfile profile with
         | Error e -> Error ("Failed to parse configuration: " + e)
         | Ok config ->
             match config.Test with
@@ -438,7 +438,7 @@ let runTest (profile: BuildProfile) (extraArgs: string) (targetProfile: string o
     | Error e -> Error e
     | Ok () ->
         let content = File.ReadAllText "flappy.toml"
-        match Config.parse content targetProfile with
+        match Config.parse content targetProfile profile with
         | Ok config ->
             match config.Test with
             | Some testConfig ->

@@ -14,28 +14,16 @@ type PackageConfig =
       Authors: string list }
 
 type BuildConfig =
-
     {
-
         Compiler: string
-
         Language: string
-
         Standard: string
-
         Output: string
-
         Arch: string
-
         Type: string
-
         Defines: string list
-
         Flags: string list
-
     }
-
-
 
 type DependencySource = 
     | Git of url: string * tag: string option
@@ -127,33 +115,114 @@ let defaultConfig =
         IsProfileDefined = false
     }
 
-let parse (tomlContent: string) (profileOverride: string option) : Result<FlappyConfig, string> =
+// Helpers
+let getTable (key: string) (m: TomlTable) =
+    if m.ContainsKey(key) && m.[key] :? TomlTable then
+        Some(m.[key] :?> TomlTable)
+    else
+        None
+
+let getString (key: string) (m: TomlTable) (def: string) =
+    if m.ContainsKey(key) && m.[key] :? string then
+        m.[key] :?> string
+    else
+        def
+
+let getOptString (key: string) (m: TomlTable) =
+    if m.ContainsKey key && m.[key] :? string then
+        Some(m.[key] :?> string)
+    else
+        None
+
+let getList (key: string) (m: TomlTable) =
+    if m.ContainsKey key && m.[key] :? TomlArray then
+        (m.[key] :?> TomlArray) |> Seq.cast<obj> |> Seq.map string |> Seq.toList
+    else
+        []
+
+let mergeBuild (baseCfg: BuildConfig) (overrides: TomlTable) =
+    { Compiler = getString "compiler" overrides baseCfg.Compiler
+      Language = getString "language" overrides baseCfg.Language
+      Standard = getString "standard" overrides baseCfg.Standard
+      Output = getString "output" overrides baseCfg.Output
+      Arch = getString "arch" overrides baseCfg.Arch
+      Type = getString "type" overrides baseCfg.Type
+      Defines = baseCfg.Defines @ (getList "defines" overrides)
+      Flags = baseCfg.Flags @ (getList "flags" overrides) }
+
+let parseDependency (key: string) (depTable: TomlTable) (platformKey: string) (modeKey: string) : Dependency option =
+    let source =
+        if depTable.ContainsKey("git") then
+            Some(Git(getString "git" depTable "", getOptString "tag" depTable))
+        elif depTable.ContainsKey("url") then
+            Some(Url(getString "url" depTable ""))
+        elif depTable.ContainsKey("path") then
+            Some(Local(getString "path" depTable ""))
+        else None
+    
+    match source with
+    | Some s ->
+        let defs = getList "defines" depTable
+        let bCmd = getOptString "build_cmd" depTable
+        let incs = if depTable.ContainsKey "include_dirs" then Some (getList "include_dirs" depTable) else None
+        let lDirs = if depTable.ContainsKey "lib_dirs" then Some (getList "lib_dirs" depTable) else None
+        let libs = if depTable.ContainsKey "libs" then Some (getList "libs" depTable) else None
+        let extra = getList "dependencies" depTable
+
+        let baseDep = 
+            {
+                Name = key
+                Source = s
+                Defines = defs
+                BuildCmd = bCmd
+                IncludeDirs = incs
+                LibDirs = lDirs
+                Libs = libs
+                ExtraDependencies = extra
+            }
+
+        let mergeDep (d: Dependency) (t: TomlTable) =
+            let newDefs = getList "defines" t
+            let newBCmd = getOptString "build_cmd" t
+            let newIncs = if t.ContainsKey "include_dirs" then Some (getList "include_dirs" t) else d.IncludeDirs
+            let newLDirs = if t.ContainsKey "lib_dirs" then Some (getList "lib_dirs" t) else d.LibDirs
+            let newLibs = if t.ContainsKey "libs" then Some (getList "libs" t) else d.Libs
+            let newExtra = getList "dependencies" t
+            
+            {
+                d with
+                    Defines = d.Defines @ newDefs
+                    BuildCmd = if newBCmd.IsSome then newBCmd else d.BuildCmd
+                    IncludeDirs = newIncs
+                    LibDirs = newLDirs
+                    Libs = newLibs
+                    ExtraDependencies = d.ExtraDependencies @ newExtra
+            }
+
+        // 1. Merge [dep.mode]
+        let dep = 
+            match getTable modeKey depTable with 
+            | Some t -> mergeDep baseDep t 
+            | None -> baseDep
+        
+        // 2. Merge [dep.platform]
+        let dep = 
+            match getTable platformKey depTable with
+            | Some platTable ->
+                let d = mergeDep dep platTable
+                // 3. Merge [dep.platform.mode]
+                match getTable modeKey platTable with 
+                | Some t -> mergeDep d t 
+                | None -> d
+            | None -> dep
+        
+        Some dep
+    | None -> None
+
+let parse (tomlContent: string) (profileOverride: string option) (buildMode: BuildProfile) : Result<FlappyConfig, string> =
     try
         let model = Toml.ToModel tomlContent
-
-        let getTable (key: string) (m: TomlTable) =
-            if m.ContainsKey(key) && m.[key] :? TomlTable then
-                Some(m.[key] :?> TomlTable)
-            else
-                None
-
-        let getString (key: string) (m: TomlTable) (def: string) =
-            if m.ContainsKey(key) && m.[key] :? string then
-                m.[key] :?> string
-            else
-                def
-
-        let getOptString (key: string) (m: TomlTable) =
-            if m.ContainsKey key && m.[key] :? string then
-                Some(m.[key] :?> string)
-            else
-                None
-
-        let getList (key: string) (m: TomlTable) =
-            if m.ContainsKey key && m.[key] :? TomlArray then
-                (m.[key] :?> TomlArray) |> Seq.cast<obj> |> Seq.map string |> Seq.toList
-            else
-                []
+        let modeKey = match buildMode with | Debug -> "debug" | Release -> "release"
 
         let packageConfig =
             match getTable "package" model with
@@ -165,21 +234,10 @@ let parse (tomlContent: string) (profileOverride: string option) : Result<Flappy
                 }
             | None -> defaultConfig.Package
 
-        let merge (baseCfg: BuildConfig) (overrides: TomlTable) =
-            { Compiler = getString "compiler" overrides baseCfg.Compiler
-              Language = getString "language" overrides baseCfg.Language
-              Standard = getString "standard" overrides baseCfg.Standard
-              Output = getString "output" overrides baseCfg.Output
-              Arch = getString "arch" overrides baseCfg.Arch
-              Type = getString "type" overrides baseCfg.Type
-              Defines = baseCfg.Defines @ (getList "defines" overrides)
-              Flags = baseCfg.Flags @ (getList "flags" overrides) }
-
         let mutable wasProfileDefined = false
         let buildConfig =
             match getTable "build" model with
             | Some build ->
-                // 1. Get base values
                 let baseCfg = 
                     { defaultConfig.Build with
                         Compiler = getString "compiler" build defaultConfig.Build.Compiler
@@ -191,6 +249,12 @@ let parse (tomlContent: string) (profileOverride: string option) : Result<Flappy
                         Defines = getList "defines" build
                         Flags = getList "flags" build }
 
+                // Merge [build.mode]
+                let baseCfg = 
+                    match getTable modeKey build with
+                    | Some t -> mergeBuild baseCfg t
+                    | None -> baseCfg
+
                 let platformKey = 
                     if RuntimeInformation.IsOSPlatform(OSPlatform.Windows) then "windows"
                     elif RuntimeInformation.IsOSPlatform(OSPlatform.Linux) then "linux"
@@ -199,23 +263,33 @@ let parse (tomlContent: string) (profileOverride: string option) : Result<Flappy
 
                 match profileOverride with
                 | Some profile ->
-                    // Flow: Base -> Profile -> Profile.Platform
+                    // Flow: Base -> BaseMode -> Profile -> ProfileMode -> ProfilePlatform -> ProfilePlatformMode
                     match getTable profile build with
                     | Some profTable ->
                         wasProfileDefined <- true
-                        let profCfg = merge baseCfg profTable
+                        let profCfg = mergeBuild baseCfg profTable
+                        let profCfg = 
+                            match getTable modeKey profTable with 
+                            | Some t -> mergeBuild profCfg t 
+                            | None -> profCfg
+                        
                         match getTable platformKey profTable with
-                        | Some profPlatTable -> merge profCfg profPlatTable
+                        | Some profPlatTable -> 
+                            let final = mergeBuild profCfg profPlatTable
+                            match getTable modeKey profPlatTable with 
+                            | Some t -> mergeBuild final t 
+                            | None -> final
                         | None -> profCfg
                     | None -> 
                         wasProfileDefined <- false
                         baseCfg
                 | None ->
-                    // Flow: Base -> Platform
+                    // Flow: Base -> BaseMode -> Platform -> PlatformMode
                     match getTable platformKey build with
                     | Some platTable -> 
                         wasProfileDefined <- true
-                        merge baseCfg platTable
+                        let platCfg = mergeBuild baseCfg platTable
+                        match getTable modeKey platTable with | Some t -> mergeBuild platCfg t | None -> platCfg
                     | None -> 
                         wasProfileDefined <- false
                         baseCfg
@@ -244,55 +318,7 @@ let parse (tomlContent: string) (profileOverride: string option) : Result<Flappy
                 deps.Keys
                 |> Seq.choose (fun key ->
                     if deps.[key] :? TomlTable then
-                        let depTable = deps.[key] :?> TomlTable
-                        
-                        // 1. Parse Base Configuration
-                        let source =
-                            if depTable.ContainsKey("git") then
-                                Some(Git(getString "git" depTable "", getOptString "tag" depTable))
-                            elif depTable.ContainsKey("url") then
-                                Some(Url(getString "url" depTable ""))
-                            elif depTable.ContainsKey("path") then
-                                Some(Local(getString "path" depTable ""))
-                            else None
-                            
-                        let baseDefines = getList "defines" depTable
-                        let baseBuildCmd = getOptString "build_cmd" depTable
-                        let baseIncludeDirs = if depTable.ContainsKey("include_dirs") then Some (getList "include_dirs" depTable) else None
-                        let baseLibDirs = if depTable.ContainsKey("lib_dirs") then Some (getList "lib_dirs" depTable) else None
-                        let baseLibs = if depTable.ContainsKey("libs") then Some (getList "libs" depTable) else None
-                        let baseExtraDeps = getList "dependencies" depTable
-
-                        // 2. Parse Platform Overrides
-                        let finalDefines, finalBuildCmd, finalIncludeDirs, finalLibDirs, finalLibs, finalExtraDeps =
-                            if depTable.ContainsKey(platformKey) && depTable.[platformKey] :? TomlTable then
-                                let platTable = depTable.[platformKey] :?> TomlTable
-                                let platDefines = getList "defines" platTable
-                                let platBuildCmd = getOptString "build_cmd" platTable
-                                let platIncludeDirs = if platTable.ContainsKey("include_dirs") then Some (getList "include_dirs" platTable) else None
-                                let platLibDirs = if platTable.ContainsKey("lib_dirs") then Some (getList "lib_dirs" platTable) else None
-                                let platLibs = if platTable.ContainsKey("libs") then Some (getList "libs" platTable) else None
-                                let platExtraDeps = getList "dependencies" platTable
-                                
-                                // Merge logic:
-                                // Defines: Append
-                                // BuildCmd: Override if present
-                                // IncludeDirs: Override if present
-                                // LibDirs: Override if present
-                                // Libs: Override if present
-                                // ExtraDependencies: Append
-                                (baseDefines @ platDefines,
-                                 (if platBuildCmd.IsSome then platBuildCmd else baseBuildCmd),
-                                 (if platIncludeDirs.IsSome then platIncludeDirs else baseIncludeDirs),
-                                 (if platLibDirs.IsSome then platLibDirs else baseLibDirs),
-                                 (if platLibs.IsSome then platLibs else baseLibs),
-                                 baseExtraDeps @ platExtraDeps)
-                            else
-                                (baseDefines, baseBuildCmd, baseIncludeDirs, baseLibDirs, baseLibs, baseExtraDeps)
-
-                        match source with
-                        | Some s -> Some { Name = key; Source = s; Defines = finalDefines; BuildCmd = finalBuildCmd; IncludeDirs = finalIncludeDirs; LibDirs = finalLibDirs; Libs = finalLibs; ExtraDependencies = finalExtraDeps }
-                        | None -> None
+                        parseDependency key (deps.[key] :?> TomlTable) platformKey modeKey
                     else None)
                 |> Seq.toList
             | None -> []
@@ -304,7 +330,7 @@ let formatToml (content: string) =
     // Ensure exactly one blank line before any section header [section]
     // 1. Normalize all line endings to LF and collapse multiple empty lines
     let normalized = content.Replace("\r\n", "\n")
-    let collapsed = Regex.Replace(normalized, @"\n{2,}", "\n")
+    let collapsed = Regex.Replace(normalized, @"\n{{2,}}", "\n")
     // 2. Insert a blank line before every section header except the first one
     let formatted = Regex.Replace(collapsed, @"\n(\[)", "\n\n$1")
     formatted.Trim() + "\n"
@@ -379,9 +405,9 @@ let saveLock (filePath: string) (lock: LockConfig) =
     lock.Entries
     |> List.iteri (fun i e ->
         if i > 0 then sb.AppendLine "\n[[dependencies]]" |> ignore
-        sb.AppendLine $"name = \"{e.Name}\" " |> ignore
-        sb.AppendLine $"source = \"{e.Source}\" " |> ignore
-        sb.AppendLine $"resolved = \"{e.Resolved}\" " |> ignore) 
+        sb.AppendLine (sprintf "name = \"%s\" " e.Name) |> ignore
+        sb.AppendLine (sprintf "source = \"%s\" " e.Source) |> ignore
+        sb.AppendLine (sprintf "resolved = \"%s\" " e.Resolved) |> ignore) 
     File.WriteAllText(filePath, sb.ToString())
 
 let addDependency (filePath: string) (name: string) (tomlLine: string) : Result<unit, string> =
@@ -389,7 +415,7 @@ let addDependency (filePath: string) (name: string) (tomlLine: string) : Result<
         if not (File.Exists filePath) then Error "flappy.toml not found."
         else
             let lines = File.ReadAllLines filePath |> Array.toList
-            let regex = Regex($"^\s*{Regex.Escape name}\s*=", RegexOptions.IgnoreCase)
+            let regex = Regex(sprintf "^\\s*%s\\s*=" (Regex.Escape name), RegexOptions.IgnoreCase)
             if lines |> List.exists (fun l -> regex.IsMatch l) then
                 Error $"Dependency '{name}' already exists in flappy.toml."
             else
@@ -410,7 +436,7 @@ let removeDependency (filePath: string) (name: string) : Result<unit, string> =
         if not (File.Exists filePath) then Error "flappy.toml not found."
         else
             let lines = File.ReadAllLines filePath |> Array.toList
-            let regex = Regex($"^\s*{Regex.Escape name}\s*=", RegexOptions.IgnoreCase)
+            let regex = Regex(sprintf "^\\s*%s\\s*=" (Regex.Escape name), RegexOptions.IgnoreCase)
             let newLines = lines |> List.filter (fun l -> not (regex.IsMatch l))
             if newLines.Length = lines.Length then
                 Error $"Dependency '{name}' not found in flappy.toml."
@@ -434,9 +460,9 @@ let getVsInstallations () : VsInstallation list =
             let output = p.StandardOutput.ReadToEnd()
             p.WaitForExit()
             if p.ExitCode = 0 then
-                let nameRegex = Regex(@"""displayName"":\s*""(?<val>.*?)""")
-                let pathRegex = Regex(@"""installationPath"":\s*""(?<val>.*?)""")
-                let versionRegex = Regex(@"""productDisplayVersion"":\s*""(?<val>.*?)""")
+                let nameRegex = Regex("\"displayName\":\\s*\"(?<val>.*?)\"")
+                let pathRegex = Regex("\"installationPath\":\\s*\"(?<val>.*?)\"")
+                let versionRegex = Regex("\"productDisplayVersion\":\\s*\"(?<val>.*?)\"")
                 
                 let names = nameRegex.Matches(output) |> Seq.cast<Match> |> Seq.map (fun m -> m.Groups.["val"].Value) |> Seq.toList
                 let paths = pathRegex.Matches(output) |> Seq.cast<Match> |> Seq.map (fun m -> m.Groups.["val"].Value.Replace("\\\\", "\\")) |> Seq.toList

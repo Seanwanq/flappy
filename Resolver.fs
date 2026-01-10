@@ -26,7 +26,7 @@ let resolveOne (dep: Dependency) (profile: BuildProfile) (compiler: string) (arc
         let tomlPath = Path.Combine(path, "flappy.toml")
         if File.Exists tomlPath then
             let content = File.ReadAllText tomlPath
-            match Config.parse content None with
+            match Config.parse content None profile with
             | Ok config -> Ok (path, config.Dependencies)
             | Error e -> Error $"Failed to parse flappy.toml in {dep.Name}: {e}"
         else

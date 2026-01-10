@@ -72,11 +72,13 @@ cmake . -DOPENSSL_INCLUDE_DIR="%FLAPPY_DEP_OPENSSL_INCLUDE%"
 
 ### Key Concepts
 
-#### 1. Platform Overrides
-Use `[dependencies.pkg.windows]`, `[dependencies.pkg.linux]`, `[dependencies.pkg.macos]` to override:
+#### 1. Platform & Mode Overrides
+Use `[dependencies.pkg.windows]`, `[dependencies.pkg.debug]`, `[dependencies.pkg.windows.debug]` etc. to override:
 *   `build_cmd`: The command to build the library.
 *   `libs`: List of library files to link against.
 *   `defines`: Preprocessor definitions.
+
+Hierarchy: `Base` -> `Mode` -> `Profile` -> `Platform`.
 
 #### 2. Environment Injection
 When Flappy runs your `build_cmd`, it injects helpful variables:

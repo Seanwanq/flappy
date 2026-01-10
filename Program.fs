@@ -209,11 +209,11 @@ let runProfileWizard () =
                     Log.error "Error" e
                     1
 
-let ensureProfileDefined (profile: string option) =
+let ensureProfileDefined (profile: string option) (buildProfile: BuildProfile) =
     if not (File.Exists "flappy.toml") then Error "flappy.toml not found."
     else
         let content = File.ReadAllText "flappy.toml"
-        match Config.parse content profile with
+        match Config.parse content profile buildProfile with
         | Error e -> Error e
         | Ok config ->
             let compiler = config.Build.Compiler
@@ -319,12 +319,12 @@ let main args =
             | head :: rest when not (head.StartsWith("-")) -> Some head, rest
             | _ -> None, tail
         
-        match ensureProfileDefined profileArg with
+        let profile = if List.contains "--release" otherArgs then Release else Debug
+        match ensureProfileDefined profileArg profile with
         | Error e -> 
             if e <> "Build cancelled by user." then Console.Error.WriteLine(e)
             1
         | Ok profileArg ->
-            let profile = if List.contains "--release" otherArgs then Release else Debug
             let skipDeps = List.contains "--no-deps" otherArgs
             let sw = Diagnostics.Stopwatch.StartNew()
             match build profile profileArg skipDeps with
@@ -349,12 +349,12 @@ let main args =
             | head :: rest when not (head.StartsWith("-")) -> Some head, rest
             | _ -> None, tail
 
-        match ensureProfileDefined profileArg with
+        let profile = if List.contains "--release" otherArgs then Release else Debug
+        match ensureProfileDefined profileArg profile with
         | Error e -> 
             if e <> "Build cancelled by user." then Console.Error.WriteLine(e)
             1
         | Ok profileArg ->
-            let profile = if List.contains "--release" otherArgs then Release else Debug
             let skipDeps = List.contains "--no-deps" otherArgs
             let extraArgs =
                 match otherArgs |> List.tryFindIndex (fun x -> x = "--") with
@@ -381,12 +381,12 @@ let main args =
             | head :: rest when not (head.StartsWith("-")) -> Some head, rest
             | _ -> None, tail
 
-        match ensureProfileDefined profileArg with
+        let profile = if List.contains "--release" otherArgs then Release else Debug
+        match ensureProfileDefined profileArg profile with
         | Error e -> 
             if e <> "Build cancelled by user." then Console.Error.WriteLine(e)
             1
         | Ok profileArg ->
-            let profile = if List.contains "--release" otherArgs then Release else Debug
             let skipDeps = List.contains "--no-deps" otherArgs
             let extraArgs =
                 match otherArgs |> List.tryFindIndex (fun x -> x = "--") with
@@ -404,7 +404,7 @@ let main args =
             1
         else
             let content = File.ReadAllText "flappy.toml"
-            match Config.parse content None with
+            match Config.parse content None Debug with
             | Error e -> Log.error "Error" e; 1
             | Ok config ->
                 let targetName = match tail with | name :: _ -> Some name | [] -> None
@@ -449,7 +449,7 @@ let main args =
             1
         else
             let content = File.ReadAllText "flappy.toml"
-            match Config.parse content None with
+            match Config.parse content None Debug with
             | Error e -> 
                 Console.Error.WriteLine($"Failed to parse flappy.toml: {e}")
                 1
