@@ -4,6 +4,7 @@ open System
 open System.IO
 open System.Runtime.InteropServices
 open Flappy.Config
+open Flappy.Core
 
 type InitOptions = {
     Name: string

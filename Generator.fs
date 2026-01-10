@@ -5,6 +5,7 @@ open System.IO
 open System.Text.Json
 open Flappy.Config
 open Flappy.Builder
+open Flappy.Core
 
 type CompileCommand = {
     directory: string

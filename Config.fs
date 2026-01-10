@@ -7,89 +7,7 @@ open System.Runtime.InteropServices
 open System.Text.RegularExpressions
 open Tomlyn
 open Tomlyn.Model
-
-type PackageConfig = 
-    { Name: string
-      Version: string
-      Authors: string list }
-
-type BuildConfig =
-    {
-        Compiler: string
-        Language: string
-        Standard: string
-        Output: string
-        Arch: string
-        Type: string
-        Defines: string list
-        Flags: string list
-    }
-
-type DependencySource = 
-    | Git of url: string * tag: string option
-    | Url of url: string
-    | Local of path: string
-
-type Dependency = 
-    { Name: string
-      Source: DependencySource
-      Defines: string list
-      BuildCmd: string option
-      IncludeDirs: string list option
-      LibDirs: string list option
-      Libs: string list option
-      ExtraDependencies: string list }
-
-type DependencyMetadata = 
-    { Name: string
-      IncludePaths: string list
-      Libs: string list
-      RuntimeLibs: string list
-      Resolved: string }
-
-type TestConfig = 
-    { Sources: string list
-      Output: string
-      Defines: string list
-      Flags: string list }
-
-type FlappyConfig = 
-    { Package: PackageConfig
-      Build: BuildConfig
-      Test: TestConfig option
-      Dependencies: Dependency list
-      IsProfileDefined: bool }
-
-type LockEntry = 
-    { Name: string
-      Source: string
-      Resolved: string }
-
-type LockConfig = { Entries: LockEntry list }
-
-module Log = 
-    let info (action: string) (message: string) =
-        Console.ForegroundColor <- ConsoleColor.Green
-        let paddedAction = action.PadLeft(12)
-        Console.Write($"{paddedAction} ")
-        Console.ResetColor()
-        Console.WriteLine(message)
-
-    let warn (action: string) (message: string) =
-        Console.ForegroundColor <- ConsoleColor.Yellow
-        let paddedAction = action.PadLeft(12)
-        Console.Write($"{paddedAction} ")
-        Console.ResetColor()
-        Console.WriteLine(message)
-
-    let error (action: string) (message: string) =
-        Console.ForegroundColor <- ConsoleColor.Red
-        let paddedAction = action.PadLeft(12)
-        Console.Write($"{paddedAction} ")
-        Console.ResetColor()
-        Console.WriteLine(message)
-
-type BuildProfile = Debug | Release
+open Flappy.Core
 
 let defaultConfig =
     {
@@ -169,7 +87,7 @@ let parseDependency (key: string) (depTable: TomlTable) (platformKey: string) (m
         let libs = if depTable.ContainsKey "libs" then Some (getList "libs" depTable) else None
         let extra = getList "dependencies" depTable
 
-        let baseDep = 
+        let baseDep =
             {
                 Name = key
                 Source = s
@@ -200,13 +118,13 @@ let parseDependency (key: string) (depTable: TomlTable) (platformKey: string) (m
             }
 
         // 1. Merge [dep.mode]
-        let dep = 
+        let dep =
             match getTable modeKey depTable with 
             | Some t -> mergeDep baseDep t 
             | None -> baseDep
         
         // 2. Merge [dep.platform]
-        let dep = 
+        let dep =
             match getTable platformKey depTable with
             | Some platTable ->
                 let d = mergeDep dep platTable
@@ -238,7 +156,7 @@ let parse (tomlContent: string) (profileOverride: string option) (buildMode: Bui
         let buildConfig =
             match getTable "build" model with
             | Some build ->
-                let baseCfg = 
+                let baseCfg =
                     { defaultConfig.Build with
                         Compiler = getString "compiler" build defaultConfig.Build.Compiler
                         Language = getString "language" build defaultConfig.Build.Language
@@ -250,12 +168,12 @@ let parse (tomlContent: string) (profileOverride: string option) (buildMode: Bui
                         Flags = getList "flags" build }
 
                 // Merge [build.mode]
-                let baseCfg = 
+                let baseCfg =
                     match getTable modeKey build with
                     | Some t -> mergeBuild baseCfg t
                     | None -> baseCfg
 
-                let platformKey = 
+                let platformKey =
                     if RuntimeInformation.IsOSPlatform(OSPlatform.Windows) then "windows"
                     elif RuntimeInformation.IsOSPlatform(OSPlatform.Linux) then "linux"
                     elif RuntimeInformation.IsOSPlatform(OSPlatform.OSX) then "macos"
@@ -268,7 +186,7 @@ let parse (tomlContent: string) (profileOverride: string option) (buildMode: Bui
                     | Some profTable ->
                         wasProfileDefined <- true
                         let profCfg = mergeBuild baseCfg profTable
-                        let profCfg = 
+                        let profCfg =
                             match getTable modeKey profTable with 
                             | Some t -> mergeBuild profCfg t 
                             | None -> profCfg
@@ -309,7 +227,7 @@ let parse (tomlContent: string) (profileOverride: string option) (buildMode: Bui
         let dependencies =
             match getTable "dependencies" model with
             | Some deps ->
-                let platformKey = 
+                let platformKey =
                     if RuntimeInformation.IsOSPlatform(OSPlatform.Windows) then "windows"
                     elif RuntimeInformation.IsOSPlatform(OSPlatform.Linux) then "linux"
                     elif RuntimeInformation.IsOSPlatform(OSPlatform.OSX) then "macos"
@@ -343,7 +261,7 @@ let updateProfileConfig (filePath: string) (profile: string) (platform: string o
             let model = Toml.ToModel content
             
             // 1. Get or create the 'build' table
-            let buildTable = 
+            let buildTable =
                 if model.ContainsKey("build") && model.["build"] :? TomlTable then
                     model.["build"] :?> TomlTable
                 else
@@ -417,9 +335,9 @@ let addDependency (filePath: string) (name: string) (tomlLine: string) : Result<
             let lines = File.ReadAllLines filePath |> Array.toList
             let regex = Regex(sprintf "^\\s*%s\\s*=" (Regex.Escape name), RegexOptions.IgnoreCase)
             if lines |> List.exists (fun l -> regex.IsMatch l) then
-                Error $"Dependency '{name}' already exists in flappy.toml."
+                Error (sprintf "Dependency '%s' already exists in flappy.toml." name)
             else
-                let newContent = 
+                let newContent =
                     match lines |> List.tryFindIndex (fun l -> l.Trim() = "[dependencies]") with
                     | Some idx ->
                         let updated = lines.[0..idx] @ [ tomlLine ] @ lines.[idx + 1 ..]
@@ -439,7 +357,7 @@ let removeDependency (filePath: string) (name: string) : Result<unit, string> =
             let regex = Regex(sprintf "^\\s*%s\\s*=" (Regex.Escape name), RegexOptions.IgnoreCase)
             let newLines = lines |> List.filter (fun l -> not (regex.IsMatch l))
             if newLines.Length = lines.Length then
-                Error $"Dependency '{name}' not found in flappy.toml."
+                Error (sprintf "Dependency '%s' not found in flappy.toml." name)
             else
                 File.WriteAllLines(filePath, newLines)
                 Ok()
@@ -454,9 +372,9 @@ type VsInstallation = {
 let getVsInstallations () : VsInstallation list =
     let vswherePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Microsoft Visual Studio", "Installer", "vswhere.exe")
     if File.Exists vswherePath then
-        let psi = ProcessStartInfo(FileName = vswherePath, Arguments = "-products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -format json", UseShellExecute = false, RedirectStandardOutput = true, CreateNoWindow = true)
+        let psi = System.Diagnostics.ProcessStartInfo(FileName = vswherePath, Arguments = "-products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -format json", UseShellExecute = false, RedirectStandardOutput = true, CreateNoWindow = true)
         try
-            use p = Process.Start(psi)
+            use p = System.Diagnostics.Process.Start(psi)
             let output = p.StandardOutput.ReadToEnd()
             p.WaitForExit()
             if p.ExitCode = 0 then

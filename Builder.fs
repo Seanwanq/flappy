@@ -7,6 +7,7 @@ open System.Runtime.InteropServices
 open Flappy.Config
 open Flappy.DependencyManager
 open Flappy.Resolver
+open Flappy.Core
 
 let runCommand (cmd: string) (args: string) = 
     let psi = ProcessStartInfo(FileName = cmd, Arguments = args, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true)

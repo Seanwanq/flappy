@@ -9,6 +9,7 @@ open System.Runtime.InteropServices
 open System.Threading
 open System.Text.RegularExpressions
 open Flappy.Config
+open Flappy.Core
 
 let getGlobalCacheDir () =
     let basePath =

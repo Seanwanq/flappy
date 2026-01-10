@@ -9,6 +9,7 @@ open Flappy.Builder
 open Flappy.GlobalConfig
 open Flappy.Toolchain
 open Flappy.Interactive
+open Flappy.Core
 open Spectre.Console
 
 let getOrSetupCompiler () =

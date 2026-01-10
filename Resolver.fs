@@ -3,6 +3,7 @@ module Flappy.Resolver
 open System.IO
 open Flappy.Config
 open Flappy.DependencyManager
+open Flappy.Core
 
 type ResolvedNode = {
     Name: string

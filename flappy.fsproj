@@ -9,6 +9,9 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="Core/Types.fs" />
+    <Compile Include="Core/Logger.fs" />
+    <Compile Include="Core/Shell.fs" />
     <Compile Include="Config.fs" />
     <Compile Include="GlobalConfig.fs" />
     <Compile Include="VsDevCmd.fs" />
