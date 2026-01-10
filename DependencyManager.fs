@@ -45,10 +45,18 @@ let computeHash (input: string) =
         hash <- hash * prime
     hash.ToString("x8")
 
-let executeCommand (cmd: string) (args: string) (workingDir: string) : Result<unit, string> =
+let executeCommand (cmd: string) (args: string) (workingDir: string) (env: Map<string, string> option) : Result<unit, string> =
     let psi = ProcessStartInfo(FileName = cmd, Arguments = args, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true)
     if not (String.IsNullOrEmpty workingDir) then
         psi.WorkingDirectory <- workingDir
+
+    env |> Option.iter (fun e ->
+        for kv in e do
+            if psi.EnvironmentVariables.ContainsKey kv.Key then
+                psi.EnvironmentVariables.[kv.Key] <- kv.Value
+            else
+                psi.EnvironmentVariables.Add(kv.Key, kv.Value))
+
     try
         use p = new Process()
         p.StartInfo <- psi
@@ -71,7 +79,7 @@ let executeCommand (cmd: string) (args: string) (workingDir: string) : Result<un
     with ex -> Error $"Failed to run {cmd}: {ex.Message}"
 
 let executeGit (args: string) (workingDir: string) : Result<unit, string> =
-    executeCommand "git" args workingDir
+    executeCommand "git" args workingDir None
 
 let getGitCommit (workingDir: string) : string =
     try
@@ -124,24 +132,75 @@ let downloadFile (url: string) (destPath: string) =
         Ok()
     with ex -> Error ex.Message
 
-let buildDependency (dep: Dependency) (path: string) (profile: BuildProfile) (compiler: string) =
+let computeDependencyHash (dep: Dependency) (path: string) =
+    let commit = if Directory.Exists(Path.Combine(path, ".git")) then getGitCommit path else "unknown"
+    let buildCmd = dep.BuildCmd |> Option.defaultValue ""
+    let defines = dep.Defines |> String.concat ";"
+    let input = $"{commit}|{buildCmd}|{defines}"
+    computeHash input
+
+let buildDependency (dep: Dependency) (path: string) (profile: BuildProfile) (compiler: string) (prevMetas: DependencyMetadata list) =
     let profileStr = match profile with Debug -> "debug" | Release -> "release"
+    
+    // Construct Environment Variables for Injection
+    let mutable env = Map.empty
+    env <- env.Add("CC", compiler)
+    env <- env.Add("CXX", compiler)
+    
+    let isMsvc = compiler.ToLower().Contains("cl") || compiler.ToLower() = "msvc" || compiler.ToLower().Contains("clang-cl")
+    
+    for meta in prevMetas do
+        let name = meta.Name.ToUpper().Replace("-", "_")
+        let incs = meta.IncludePaths |> String.concat (if isMsvc then ";" else ":")
+        let libs = meta.Libs |> String.concat (if isMsvc then ";" else ":")
+        env <- env.Add($"FLAPPY_DEP_{name}_INCLUDE", incs)
+        env <- env.Add($"FLAPPY_DEP_{name}_LIB", libs)
+        
+        // Standard Injection
+        if isMsvc then
+            let existingInc = Environment.GetEnvironmentVariable("INCLUDE")
+            let existingLib = Environment.GetEnvironmentVariable("LIB")
+            env <- env.Add("INCLUDE", incs + (if String.IsNullOrEmpty existingInc then "" else ";" + existingInc))
+            env <- env.Add("LIB", libs + (if String.IsNullOrEmpty existingLib then "" else ";" + existingLib))
+        else
+            let existingCpath = Environment.GetEnvironmentVariable("CPATH")
+            let existingLibPath = Environment.GetEnvironmentVariable("LIBRARY_PATH")
+            env <- env.Add("CPATH", incs + (if String.IsNullOrEmpty existingCpath then "" else ":" + existingCpath))
+            env <- env.Add("LIBRARY_PATH", libs + (if String.IsNullOrEmpty existingLibPath then "" else ":" + existingLibPath))
+
     match dep.BuildCmd with
     | Some cmd ->
-        Log.info "Build" $"Custom command for {dep.Name}"
-        let finalCmd, finalArgs = 
-            match patchCommandForMsvc "cmd.exe" $"/c {cmd}" "x64" with
-            | Some(c, a) -> c, a
-            | None -> "cmd.exe", $"/c {cmd}"
-        executeCommand finalCmd finalArgs path
+        let stateFile = Path.Combine(path, ".flappy_build_state")
+        let currentHash = computeDependencyHash dep path
+        
+        let shouldBuild =
+            if File.Exists stateFile then
+                let storedHash = File.ReadAllText(stateFile).Trim()
+                storedHash <> currentHash
+            else true
+
+        if not shouldBuild then
+            Log.info "Skip" $"{dep.Name} (Up-to-date)"
+            Ok()
+        else
+            Log.info "Build" $"Custom command for {dep.Name}"
+            let finalCmd, finalArgs = 
+                match patchCommandForMsvc "cmd.exe" $"/c {cmd}" "x64" with
+                | Some(c, a) -> c, a
+                | None -> "cmd.exe", $"/c {cmd}"
+            match executeCommand finalCmd finalArgs path (Some env) with
+            | Ok () ->
+                try File.WriteAllText(stateFile, currentHash) with _ -> ()
+                Ok ()
+            | Error e -> Error e
     | None ->
         if File.Exists(Path.Combine(path, "flappy.toml")) then
             // Sub-flappy handles its own incremental build via obj/<arch>/<profile>
             // We just need to trigger it.
             Log.info "Build" $"Flappy build for {dep.Name}"
             let exePath = Process.GetCurrentProcess().MainModule.FileName
-            let args = if profile = Release then "build --release" else "build"
-            executeCommand exePath args path
+            let args = (if profile = Release then "build --release" else "build") + " --no-deps"
+            executeCommand exePath args path (Some env)
         elif File.Exists(Path.Combine(path, "CMakeLists.txt")) then
             // ISOLATION: Each profile gets its own build directory
             let buildDir = Path.Combine(path, "flappy_build", profileStr)
@@ -162,11 +221,11 @@ let buildDependency (dep: Dependency) (path: string) (profile: BuildProfile) (co
                 
                 let cmakeBuildType = if profile = Release then "Release" else "Debug"
                 let cmakeArgs = $"-S \"{path}\" -B \"{buildDir}\" -DCMAKE_BUILD_TYPE={cmakeBuildType} -DCMAKE_CXX_COMPILER=\"{compiler}\""
-                match executeCommand "cmake" cmakeArgs path with
+                match executeCommand "cmake" cmakeArgs path (Some env) with
                 | Error e -> Error e
                 | Ok() -> 
                     Log.info "Compile" $"{dep.Name} (CMake {profileStr})"
-                    executeCommand "cmake" $"--build \"{buildDir}\" --config {cmakeBuildType}" path
+                    executeCommand "cmake" $"--build \"{buildDir}\" --config {cmakeBuildType}" path (Some env)
         else
             Ok()
 
@@ -195,9 +254,23 @@ let resolveDependencyMetadata (dep: Dependency) (packageDir: string) (resolved: 
                 
     // 2. Resolve Library Files (Link-time)
     let libs =
-        match dep.Libs with
-        | Some libFiles -> libFiles |> List.map (fun l -> Path.Combine(packageDir, l))
-        | None -> 
+        let explicitLibs = 
+            match dep.Libs with
+            | Some libFiles -> libFiles |> List.map (fun l -> Path.Combine(packageDir, l))
+            | None -> []
+
+        let scannedLibs =
+            match dep.LibDirs with
+            | Some dirs ->
+                let libExts = if RuntimeInformation.IsOSPlatform(OSPlatform.Windows) then [ "*.lib" ] else [ "*.a"; "*.so"; "*.dylib" ]
+                dirs |> List.collect (fun d -> 
+                    let dir = Path.Combine(packageDir, d)
+                    scanFiles dir libExts)
+            | None -> []
+
+        if not explicitLibs.IsEmpty || not scannedLibs.IsEmpty then
+            explicitLibs @ scannedLibs
+        else
             let libExts = if RuntimeInformation.IsOSPlatform(OSPlatform.Windows) then [ "*.lib" ] else [ "*.a"; "*.so"; "*.dylib" ]
             if isFlappy then
                 let distLib = Path.Combine(packageDir, "dist", "lib")
@@ -217,20 +290,23 @@ let resolveDependencyMetadata (dep: Dependency) (packageDir: string) (resolved: 
         else
             scanFiles packageDir dllExts
                 
-    { IncludePaths = includePaths; Libs = libs |> List.distinct; RuntimeLibs = runtimeLibs |> List.distinct; Resolved = resolved }
+    { Name = dep.Name; IncludePaths = includePaths; Libs = libs |> List.distinct; RuntimeLibs = runtimeLibs |> List.distinct; Resolved = resolved }
 
-let getCacheKey (dep: Dependency) =
+let getCacheKey (dep: Dependency) (profile: BuildProfile) (compiler: string) (arch: string) =
+    let profileStr = match profile with Debug -> "debug" | Release -> "release"
+    let safeCompiler = compiler.Replace("\\", "_").Replace("/", "_").Replace(":", "")
+    let suffix = $"{profileStr}_{arch}_{safeCompiler}"
     match dep.Source with
     | Git(url, tag) ->
         let version = tag |> Option.defaultValue "HEAD"
         let hash = computeHash url
-        $"{dep.Name}@{version}_{hash}"
+        $"{dep.Name}@{version}_{hash}_{suffix}"
     | Url url ->
         let hash = computeHash url
-        $"{dep.Name}@url_{hash}"
+        $"{dep.Name}@url_{hash}_{suffix}"
     | Local _ -> ""
 
-let installToCache (dep: Dependency) (cachePath: string) (profile: BuildProfile) (compiler: string) : Result<unit, string> =
+let installToCache (dep: Dependency) (cachePath: string) : Result<unit, string> =
     if Directory.Exists cachePath then
         Ok()
     else
@@ -257,36 +333,51 @@ let installToCache (dep: Dependency) (cachePath: string) (profile: BuildProfile)
                 Error e
         | Local _ -> Ok()
 
-let install (dep: Dependency) (profile: BuildProfile) (compiler: string) : Result<DependencyMetadata, string> =
+// New public function
+let fetch (dep: Dependency) (profile: BuildProfile) (compiler: string) (arch: string) : Result<string, string> =
+    match dep.Source with
+    | Local path -> 
+        let fullPath = if Path.IsPathRooted path then path else Path.GetFullPath path
+        if Directory.Exists fullPath then Ok fullPath
+        else Error $"Local path not found: {fullPath}"
+    | _ ->
+        let cacheDir = getGlobalCacheDir ()
+        let key = getCacheKey dep profile compiler arch
+        let cachedPath = Path.Combine(cacheDir, key)
+        match installToCache dep cachedPath with
+        | Ok () -> Ok cachedPath
+        | Error e -> Error e
+
+let install (dep: Dependency) (profile: BuildProfile) (compiler: string) (arch: string) (prevMetas: DependencyMetadata list) : Result<DependencyMetadata, string> =
     match dep.Source with
     | Local path ->
         let fullPath = if Path.IsPathRooted path then path else Path.GetFullPath path
         if Directory.Exists fullPath then
-            match buildDependency dep fullPath profile compiler with
+            match buildDependency dep fullPath profile compiler prevMetas with
             | Error e -> Error e
             | Ok() -> Ok(resolveDependencyMetadata dep fullPath "local")
         else
             Error $"Local path not found: {fullPath}"
     | _ ->
         let cacheDir = getGlobalCacheDir ()
-        let key = getCacheKey dep
+        let key = getCacheKey dep profile compiler arch
         let cachedPath = Path.Combine(cacheDir, key)
-        // Note: installToCache doesn't build, it just downloads. 
-        // Wait, the previous implementation built INSIDE installToCache?
-        // Let's check the old code.
-        // Old code: match installToCache... -> match buildDependency...
-        // Ah, buildDependency is called AFTER installToCache.
-        // So installToCache signature doesn't strictly need compiler if it just downloads.
-        // But wait, my new signature for installToCache included it.
-        // Let's re-read the old code logic.
         
-        match installToCache dep cachedPath profile compiler with
+        match installToCache dep cachedPath with
         | Error e -> Error e
         | Ok() ->
-            match buildDependency dep cachedPath profile compiler with
+            match buildDependency dep cachedPath profile compiler prevMetas with
             | Error e -> Error e
             | Ok() ->
                 let localDir = getLocalPackagesDir ()
+                // Link name needs to be unique too if we link multiple? 
+                // Actually, 'packages/fmt' usually points to ONE version.
+                // If we are building Debug, packages/fmt -> cache/fmt_debug.
+                // If we are building Release, packages/fmt -> cache/fmt_release.
+                // This means 'packages/' folder is ephemeral per build state?
+                // OR we link to 'packages/fmt' and inside it has artifacts?
+                // CURRENT LINK LOGIC: createLink cachedPath linkPath.
+                // It replaces the link. This is fine for now as long as we build one profile at a time.
                 let linkPath = Path.Combine(localDir, dep.Name)
                 createLink cachedPath linkPath
                 Ok(resolveDependencyMetadata dep linkPath "remote")
@@ -298,18 +389,18 @@ let cleanBuildArtifacts (path: string) =
         if Directory.Exists fullPath then
             try Directory.Delete(fullPath, true) with _ -> ()
 
-let update (dep: Dependency) : Result<unit, string> =
+let update (dep: Dependency) (profile: BuildProfile) (compiler: string) (arch: string) : Result<unit, string> =
     match dep.Source with
     | Local _ -> 
         Log.info "Update" $"Skipping local dependency {dep.Name}"
         Ok()
     | Git(url, tag) ->
         let cacheDir = getGlobalCacheDir()
-        let key = getCacheKey dep
+        let key = getCacheKey dep profile compiler arch
         let cachedPath = Path.Combine(cacheDir, key)
         
         if not (Directory.Exists cachedPath) then
-            Error $"Dependency {dep.Name} is not installed. Run 'flappy sync' first."
+            Error $"Dependency {dep.Name} is not installed for this profile. Run 'flappy sync' first."
         else
             Log.info "Updating" $"{dep.Name} from {url}"
             // 1. Fetch and Reset
@@ -326,11 +417,14 @@ let update (dep: Dependency) : Result<unit, string> =
                     // 3. Also clean local package link/dir if any
                     let localPkgDir = Path.Combine(getLocalPackagesDir(), dep.Name)
                     cleanBuildArtifacts localPkgDir
+                    // 4. Remove state file to trigger rebuild
+                    let stateFile = Path.Combine(cachedPath, ".flappy_build_state")
+                    if File.Exists stateFile then File.Delete stateFile
                     Ok()
     | Url url ->
         // For direct URLs, we just re-download
         let cacheDir = getGlobalCacheDir()
-        let key = getCacheKey dep
+        let key = getCacheKey dep profile compiler arch
         let cachedPath = Path.Combine(cacheDir, key)
         if Directory.Exists cachedPath then Directory.Delete(cachedPath, true)
         Log.info "Updating" $"{dep.Name} (Re-downloading)"

@@ -15,7 +15,7 @@ type CompileCommand = {
 let generate (targetProfile: string option) =
     // Using Debug profile for generation by default as it usually contains more info (like symbols) 
     // and is what developers want for editing.
-    match Builder.prepareBuild Debug targetProfile with
+    match Builder.prepareBuild Debug targetProfile false with
     | Error e -> Error e
     | Ok ctx ->
         let includeFlags = if ctx.IsMsvc then ctx.IncludePaths |> List.map (fun p -> "/I\"" + p + "\"") |> String.concat " " else ctx.IncludePaths |> List.map (fun p -> "-I\"" + p + "\"") |> String.concat " "

@@ -48,10 +48,13 @@ type Dependency =
       Defines: string list
       BuildCmd: string option
       IncludeDirs: string list option
-      Libs: string list option }
+      LibDirs: string list option
+      Libs: string list option
+      ExtraDependencies: string list }
 
 type DependencyMetadata = 
-    { IncludePaths: string list
+    { Name: string
+      IncludePaths: string list
       Libs: string list
       RuntimeLibs: string list
       Resolved: string }
@@ -232,10 +235,18 @@ let parse (tomlContent: string) (profileOverride: string option) : Result<Flappy
         let dependencies =
             match getTable "dependencies" model with
             | Some deps ->
+                let platformKey = 
+                    if RuntimeInformation.IsOSPlatform(OSPlatform.Windows) then "windows"
+                    elif RuntimeInformation.IsOSPlatform(OSPlatform.Linux) then "linux"
+                    elif RuntimeInformation.IsOSPlatform(OSPlatform.OSX) then "macos"
+                    else "unknown"
+
                 deps.Keys
                 |> Seq.choose (fun key ->
                     if deps.[key] :? TomlTable then
                         let depTable = deps.[key] :?> TomlTable
+                        
+                        // 1. Parse Base Configuration
                         let source =
                             if depTable.ContainsKey("git") then
                                 Some(Git(getString "git" depTable "", getOptString "tag" depTable))
@@ -244,12 +255,43 @@ let parse (tomlContent: string) (profileOverride: string option) : Result<Flappy
                             elif depTable.ContainsKey("path") then
                                 Some(Local(getString "path" depTable ""))
                             else None
-                        let depDefines = getList "defines" depTable
-                        let buildCmd = getOptString "build_cmd" depTable
-                        let includeDirs = if depTable.ContainsKey("include_dirs") then Some (getList "include_dirs" depTable) else None
-                        let libs = if depTable.ContainsKey("libs") then Some (getList "libs" depTable) else None
+                            
+                        let baseDefines = getList "defines" depTable
+                        let baseBuildCmd = getOptString "build_cmd" depTable
+                        let baseIncludeDirs = if depTable.ContainsKey("include_dirs") then Some (getList "include_dirs" depTable) else None
+                        let baseLibDirs = if depTable.ContainsKey("lib_dirs") then Some (getList "lib_dirs" depTable) else None
+                        let baseLibs = if depTable.ContainsKey("libs") then Some (getList "libs" depTable) else None
+                        let baseExtraDeps = getList "dependencies" depTable
+
+                        // 2. Parse Platform Overrides
+                        let finalDefines, finalBuildCmd, finalIncludeDirs, finalLibDirs, finalLibs, finalExtraDeps =
+                            if depTable.ContainsKey(platformKey) && depTable.[platformKey] :? TomlTable then
+                                let platTable = depTable.[platformKey] :?> TomlTable
+                                let platDefines = getList "defines" platTable
+                                let platBuildCmd = getOptString "build_cmd" platTable
+                                let platIncludeDirs = if platTable.ContainsKey("include_dirs") then Some (getList "include_dirs" platTable) else None
+                                let platLibDirs = if platTable.ContainsKey("lib_dirs") then Some (getList "lib_dirs" platTable) else None
+                                let platLibs = if platTable.ContainsKey("libs") then Some (getList "libs" platTable) else None
+                                let platExtraDeps = getList "dependencies" platTable
+                                
+                                // Merge logic:
+                                // Defines: Append
+                                // BuildCmd: Override if present
+                                // IncludeDirs: Override if present
+                                // LibDirs: Override if present
+                                // Libs: Override if present
+                                // ExtraDependencies: Append
+                                (baseDefines @ platDefines,
+                                 (if platBuildCmd.IsSome then platBuildCmd else baseBuildCmd),
+                                 (if platIncludeDirs.IsSome then platIncludeDirs else baseIncludeDirs),
+                                 (if platLibDirs.IsSome then platLibDirs else baseLibDirs),
+                                 (if platLibs.IsSome then platLibs else baseLibs),
+                                 baseExtraDeps @ platExtraDeps)
+                            else
+                                (baseDefines, baseBuildCmd, baseIncludeDirs, baseLibDirs, baseLibs, baseExtraDeps)
+
                         match source with
-                        | Some s -> Some { Name = key; Source = s; Defines = depDefines; BuildCmd = buildCmd; IncludeDirs = includeDirs; Libs = libs }
+                        | Some s -> Some { Name = key; Source = s; Defines = finalDefines; BuildCmd = finalBuildCmd; IncludeDirs = finalIncludeDirs; LibDirs = finalLibDirs; Libs = finalLibs; ExtraDependencies = finalExtraDeps }
                         | None -> None
                     else None)
                 |> Seq.toList

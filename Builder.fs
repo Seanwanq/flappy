@@ -6,6 +6,7 @@ open System.Diagnostics
 open System.Runtime.InteropServices
 open Flappy.Config
 open Flappy.DependencyManager
+open Flappy.Resolver
 
 let runCommand (cmd: string) (args: string) = 
     let psi = ProcessStartInfo(FileName = cmd, Arguments = args, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true)
@@ -35,14 +36,20 @@ let runCommand (cmd: string) (args: string) =
             Error ("Command failed with exit code " + string p.ExitCode)
     with ex -> Error ("Failed to run command: " + ex.Message)
 
-let installDependencies (deps: Dependency list) (profile: BuildProfile) (compiler: string) : Result<DependencyMetadata list, string> = 
-    let results = deps |> List.map (fun d -> 
-        match install d profile compiler with 
-        | Ok meta -> Ok meta 
-        | Error e -> Error ("Failed to install " + d.Name + ": " + e))
-    let failures = results |> List.choose (function Error e -> Some e | _ -> None)
-    if failures.Length > 0 then Error (String.concat "\n" failures)
-    else Ok (results |> List.choose (function Ok p -> Some p | _ -> None))
+let installDependencies (deps: Dependency list) (profile: BuildProfile) (compiler: string) (arch: string) : Result<DependencyMetadata list, string> = 
+    match resolve deps profile compiler arch with
+    | Error e -> Error ("Dependency Resolution Failed:\n" + e)
+    | Ok sortedNodes ->
+        Log.info "Graph" (sprintf "Resolved %d dependencies" sortedNodes.Length)
+        let rec buildRecursive (nodes: ResolvedNode list) (acc: DependencyMetadata list) =
+            match nodes with
+            | [] -> Ok (List.rev acc)
+            | node :: tail ->
+                match install node.Dependency profile compiler arch acc with
+                | Ok meta -> buildRecursive tail (meta :: acc)
+                | Error e -> Error ("Failed to build " + node.Name + ": " + e)
+        
+        buildRecursive sortedNodes []
 
 let sync () = 
     if not (File.Exists "flappy.toml") then Error "flappy.toml not found."
@@ -52,15 +59,18 @@ let sync () =
         | Error e -> Error ("Failed to parse configuration: " + e)
         | Ok config ->
             Log.info "Syncing" ("[" + config.Package.Name + "]")
-            match installDependencies config.Dependencies Debug config.Build.Compiler with
+            match installDependencies config.Dependencies Debug config.Build.Compiler config.Build.Arch with
             | Error e -> Error e
             | Ok results ->
-                let lockEntries = results |> List.mapi (fun i meta ->
-                    let dep = config.Dependencies.[i]
-                    let sourceStr = match dep.Source with | Git (url, _) -> url | Url url -> url | Local path -> path
-                    { Name = dep.Name; Source = sourceStr; Resolved = meta.Resolved })
+                let lockEntries = 
+                    config.Dependencies |> List.choose (fun dep ->
+                        results |> List.tryFind (fun m -> m.Name = dep.Name)
+                        |> Option.map (fun meta ->
+                            let sourceStr = match dep.Source with | Git (url, _) -> url | Url url -> url | Local path -> path
+                            { Name = dep.Name; Source = sourceStr; Resolved = meta.Resolved }))
+                
                 Config.saveLock "flappy.lock" { Entries = lockEntries }
-                Log.info "Locked" (string lockEntries.Length + " dependencies")
+                Log.info "Locked" (string lockEntries.Length + " root dependencies")
                 Ok ()
 
 type BuildContext = {
@@ -78,7 +88,7 @@ type BuildContext = {
     DepResults: DependencyMetadata list
 }
 
-let prepareBuild (profile: BuildProfile) (targetProfile: string option) : Result<BuildContext, string> =
+let prepareBuild (profile: BuildProfile) (targetProfile: string option) (skipDeps: bool) : Result<BuildContext, string> =
     if not (File.Exists "flappy.toml") then Error "flappy.toml not found."
     else
         let content = File.ReadAllText "flappy.toml"
@@ -93,7 +103,11 @@ let prepareBuild (profile: BuildProfile) (targetProfile: string option) : Result
                 if allSources.IsEmpty then Error "No source files found in src/."
                 else
                     let compiler = config.Build.Compiler
-                    match installDependencies config.Dependencies profile compiler with
+                    let depResultsResult = 
+                        if skipDeps then Ok []
+                        else installDependencies config.Dependencies profile compiler config.Build.Arch
+                    
+                    match depResultsResult with
                     | Error e -> Error e
                     | Ok depResults ->
                         let mutable includePaths = depResults |> List.collect (fun m -> m.IncludePaths)
@@ -168,7 +182,7 @@ set_target_properties({name} PROPERTIES
 )
 """
         File.WriteAllText(Path.Combine(cmakeDir, $"{name}Config.cmake"), cmakeContent)
-        Log.info "Exported" $"{name}Config.cmake"
+        Log.info "Exported" ($"{name}Config.cmake")
 
 let createDist (ctx: BuildContext) =
     let buildType = ctx.Config.Build.Type.ToLower()
@@ -204,8 +218,8 @@ let createDist (ctx: BuildContext) =
         exportCMakeConfig ctx distDir
         Log.info "Distributed" ("[" + ctx.Config.Package.Name + "] to dist/")
 
-let build (profile: BuildProfile) (targetProfile: string option) = 
-    match prepareBuild profile targetProfile with
+let build (profile: BuildProfile) (targetProfile: string option) (skipDeps: bool) = 
+    match prepareBuild profile targetProfile skipDeps with
     | Error e -> Error e
     | Ok ctx ->
         let includeFlags = if ctx.IsMsvc then ctx.IncludePaths |> List.map (fun p -> "/I\"" + p + "\"") |> String.concat " " else ctx.IncludePaths |> List.map (fun p -> "-I\"" + p + "\"") |> String.concat " "
@@ -276,8 +290,8 @@ let build (profile: BuildProfile) (targetProfile: string option) =
                                         File.Copy(dll, dest, true)
                         createDist ctx
                         Ok ()
-let run (profile: BuildProfile) (extraArgs: string) (targetProfile: string option) =
-    match build profile targetProfile with
+let run (profile: BuildProfile) (extraArgs: string) (targetProfile: string option) (skipDeps: bool) =
+    match build profile targetProfile skipDeps with
     | Error e -> Error e
     | Ok () ->
         let content = File.ReadAllText "flappy.toml"
@@ -288,7 +302,7 @@ let run (profile: BuildProfile) (extraArgs: string) (targetProfile: string optio
             else Log.info "Running" (exePath + " " + extraArgs); runCommand exePath extraArgs
         | Error e -> Error e
 
-let buildTest (profile: BuildProfile) (targetProfile: string option) =
+let buildTest (profile: BuildProfile) (targetProfile: string option) (skipDeps: bool) =
     if not (File.Exists "flappy.toml") then Error "flappy.toml not found."
     else
         let content = File.ReadAllText "flappy.toml"
@@ -312,7 +326,11 @@ let buildTest (profile: BuildProfile) (targetProfile: string option) =
                 else
                     let compiler = config.Build.Compiler
                     // 2. Install Dependencies
-                    match installDependencies config.Dependencies profile compiler with
+                    let depResultsResult = 
+                        if skipDeps then Ok []
+                        else installDependencies config.Dependencies profile compiler config.Build.Arch
+                    
+                    match depResultsResult with
                     | Error e -> Error e
                     | Ok depResults ->
                         let mutable includePaths = depResults |> List.collect (fun m -> m.IncludePaths)
@@ -415,8 +433,8 @@ let buildTest (profile: BuildProfile) (targetProfile: string option) =
                                             File.Copy(dll, dest, true)
                                 Ok ()
 
-let runTest (profile: BuildProfile) (extraArgs: string) (targetProfile: string option) =
-    match buildTest profile targetProfile with
+let runTest (profile: BuildProfile) (extraArgs: string) (targetProfile: string option) (skipDeps: bool) =
+    match buildTest profile targetProfile skipDeps with
     | Error e -> Error e
     | Ok () ->
         let content = File.ReadAllText "flappy.toml"

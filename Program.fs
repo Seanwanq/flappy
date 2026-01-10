@@ -325,8 +325,9 @@ let main args =
             1
         | Ok profileArg ->
             let profile = if List.contains "--release" otherArgs then Release else Debug
+            let skipDeps = List.contains "--no-deps" otherArgs
             let sw = Diagnostics.Stopwatch.StartNew()
-            match build profile profileArg with
+            match build profile profileArg skipDeps with
             | Ok () -> 
                 sw.Stop()
                 let profileName = if profile = Release then "release" else "dev"
@@ -354,6 +355,7 @@ let main args =
             1
         | Ok profileArg ->
             let profile = if List.contains "--release" otherArgs then Release else Debug
+            let skipDeps = List.contains "--no-deps" otherArgs
             let extraArgs =
                 match otherArgs |> List.tryFindIndex (fun x -> x = "--") with
                 | Some idx -> otherArgs |> List.skip (idx + 1) |> String.concat " "
@@ -365,7 +367,7 @@ let main args =
             | Error e -> Log.warn "CompDB" ("Failed to update compile_commands.json: " + e)
 
             let sw = Diagnostics.Stopwatch.StartNew()
-            match run profile extraArgs profileArg with
+            match run profile extraArgs profileArg skipDeps with
             | Ok () -> 
                 sw.Stop()
                 0
@@ -385,12 +387,13 @@ let main args =
             1
         | Ok profileArg ->
             let profile = if List.contains "--release" otherArgs then Release else Debug
+            let skipDeps = List.contains "--no-deps" otherArgs
             let extraArgs =
                 match otherArgs |> List.tryFindIndex (fun x -> x = "--") with
                 | Some idx -> otherArgs |> List.skip (idx + 1) |> String.concat " "
                 | None -> ""
             let sw = Diagnostics.Stopwatch.StartNew()
-            match runTest profile extraArgs profileArg with
+            match runTest profile extraArgs profileArg skipDeps with
             | Ok () -> sw.Stop(); 0
             | Error e ->
                 Console.Error.WriteLine($"Test failed: {e}")
@@ -416,7 +419,7 @@ let main args =
                 else
                     let mutable success = true
                     for dep in depsToUpdate do
-                        match Flappy.DependencyManager.update dep with
+                        match Flappy.DependencyManager.update dep Debug config.Build.Compiler config.Build.Arch with
                         | Ok() -> ()
                         | Error e -> Log.error "Failed" e; success <- false
                     
@@ -549,12 +552,15 @@ let main args =
         Console.WriteLine("  build [profile]       Build the project")
         Console.WriteLine("    --release           Build in release mode")
         Console.WriteLine("    --target, -t <name> Specify build profile/target")
+        Console.WriteLine("    --no-deps           Skip dependency installation/build")
         Console.WriteLine("  run [profile]         Build and run the project")
         Console.WriteLine("    --release           Run in release mode")
         Console.WriteLine("    --target, -t <name> Specify build profile/target")
+        Console.WriteLine("    --no-deps           Skip dependency installation/build")
         Console.WriteLine("  test [profile]        Build and run tests")
         Console.WriteLine("    --release           Test in release mode")
         Console.WriteLine("    --target, -t <name> Specify build profile/target")
+        Console.WriteLine("    --no-deps           Skip dependency installation/build")
         Console.WriteLine("  profile add           Add a custom build profile (interactive)")
         Console.WriteLine("  compdb [profile]      Generate compilation database (compile_commands.json)")
         Console.WriteLine("  xplat                 Configure toolchains for other platforms")
