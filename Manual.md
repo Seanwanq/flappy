@@ -1,4 +1,4 @@
-# 🐦 Flappy User Manual
+# 🐦 Flappy User Manual (v0.0.1)
 
 Flappy is a modern build system and package manager for C++. It brings the ease of Cargo (Rust) to the C++ ecosystem.
 
