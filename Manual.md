@@ -1,103 +1,105 @@
-# 🐦 Flappy User Manual (v0.2.0)
+# 🐦 Flappy User Manual
 
-Flappy is a minimalist build system and package manager for modern C++ development. It automates compilation, linking, dependency fetching, and recursive builds via a simple `flappy.toml` file.
+Flappy is a modern build system and package manager for C++. It brings the ease of Cargo (Rust) to the C++ ecosystem.
 
----
+## 📚 Quick Start
 
-## 🚀 Core Commands
+```bash
+# 1. Create a new project
+flappy init my_app
 
-| Command | Description | Example |
-| :--- | :--- | :--- |
-| `flappy init [name]` | Start interactive wizard to create a new project | `flappy init my_app` |
-| `flappy build [target]`| Compile the project (Debug by default) | `flappy build` |
-| `flappy build --release`| Compile in Release mode | `flappy build --release` |
-| `flappy run [target]` | Build and run the project | `flappy run` |
-| `flappy test [target]`| Build and run automated unit tests | `flappy test` |
-| `flappy profile add` | Interactively add a custom build profile | `flappy profile add` |
-| `flappy compdb` | Generate `compile_commands.json` for LSP | `flappy compdb` |
-| `flappy clean` | Remove build artifacts (`bin/`, `obj/`, `dist/`) | `flappy clean` |
-| `flappy add <name>` | Add a remote or local dependency | `flappy add fmt --git <url>` |
-| `flappy sync` | Force sync dependencies and update `flappy.lock` | `flappy sync` |
+# 2. Add a dependency
+flappy add fmt --git https://github.com/fmtlib/fmt.git
+
+# 3. Build & Run
+flappy run
+```
 
 ---
 
-## 🛠 Project Configuration (`flappy.toml`)
+## 🔧 The "Hard" Stuff: Managing Complex C Dependencies
 
-Flappy uses a hierarchical configuration system. Values are inherited and merged from top to bottom.
+Flappy shines where other tools struggle: integrating "Raw" libraries (like OpenSSL, FFmpeg) that don't use CMake or Flappy naturally.
 
-### 1. Base Configuration (`[build]`)
-Defines project-wide engineering decisions:
+### Scenario: "I need to use libcurl, which depends on OpenSSL"
+
+Problem:
+1.  `libcurl` source comes from git, has no `flappy.toml`.
+2.  `openssl` source comes from git, has no `flappy.toml`.
+3.  `libcurl` build needs `openssl` headers.
+4.  On Windows `openssl` uses `nmake`, on Linux it uses `make`.
+
+**Solution: The "Bridge" Config**
+
+You define the relationship in your **Root** `flappy.toml`.
+
 ```toml
-[build]
-language = "c++"
-standard = "c++20"
-output = "bin/my_lib"
-type = "lib" # exe, lib, dll
+[package]
+name = "my_app"
+version = "0.1.0"
+
+# 1. Define OpenSSL (The Leaf)
+[dependencies.openssl]
+git = "https://github.com/openssl/openssl.git"
+tag = "openssl-3.2.0"
+# Tell Flappy where the built .lib files end up (so they can be linked)
+libs = ["libssl.lib", "libcrypto.lib"] 
+
+# 1.1 Platform-Specific Build Commands
+[dependencies.openssl.windows]
+build_cmd = "perl Configure VC-WIN64A && nmake"
+
+[dependencies.openssl.linux]
+build_cmd = "./config && make"
+libs = ["libssl.a", "libcrypto.a"] # Override libs for Linux
+
+# 2. Define LibCurl (The Middleman)
+[dependencies.libcurl]
+git = "https://github.com/curl/curl.git"
+# CRITICAL: Manually tell Flappy that libcurl depends on openssl
+dependencies = ["openssl"] 
+libs = ["libcurl.lib"]
+
+[dependencies.libcurl.windows]
+# CRITICAL: Use injected environment variable to find OpenSSL headers
+# Flappy automatically sets %FLAPPY_DEP_OPENSSL_INCLUDE%
+build_cmd = """
+cmake . -DOPENSSL_INCLUDE_DIR="%FLAPPY_DEP_OPENSSL_INCLUDE%" 
+        -DOPENSSL_ROOT_DIR="%FLAPPY_DEP_OPENSSL_ROOT%" 
+        && cmake --build . --config Release
+"""
 ```
 
-### 2. Profiles & Targets
-Define how to build for specific environments.
+### Key Concepts
 
-#### 2.1 Platform Overrides
-Automatically applied based on the host OS:
-```toml
-[build.windows]
-compiler = "cl"
-arch = "x64"
+#### 1. Platform Overrides
+Use `[dependencies.pkg.windows]`, `[dependencies.pkg.linux]`, `[dependencies.pkg.macos]` to override:
+*   `build_cmd`: The command to build the library.
+*   `libs`: List of library files to link against.
+*   `defines`: Preprocessor definitions.
 
-[build.linux]
-compiler = "/usr/bin/g++"
-arch = "arm64"
-```
+#### 2. Environment Injection
+When Flappy runs your `build_cmd`, it injects helpful variables:
+*   `FLAPPY_DEP_<NAME>_INCLUDE`: Path to `include/` of dependency.
+*   `FLAPPY_DEP_<NAME>_LIB`: Path to `lib/` of dependency.
+*   `CC` / `CXX`: Path to your configured compiler.
+*   `INCLUDE` / `LIB`: (MSVC) Automatically updated with dependency paths.
+*   `CPATH` / `LIBRARY_PATH`: (GCC/Clang) Automatically updated with dependency paths.
 
-#### 2.2 Custom Profiles
-Run with `flappy build <name>` or `flappy build -t <name>`:
-```toml
-[build.ci]
-defines = ["CI_RUNNER"]
-flags = ["-Werror"]
-
-# Profiles can also have platform-specific implementations!
-[build.ci.linux]
-compiler = "clang++"
-```
+#### 3. Bridging (`dependencies = [...]`)
+If a library is "Raw" (no `flappy.toml`), you can specify its dependencies manually in the parent config using the `dependencies` list. This ensures Flappy builds them in the correct order and passes the metadata.
 
 ---
 
-## 📦 CMake Integration
+## 📖 CLI Reference
 
-Flappy is designed to be a "good citizen" in the C++ ecosystem.
-
-### 1. Consuming CMake Projects
-If a dependency contains a `CMakeLists.txt`, Flappy automatically invokes CMake to build it and links the results. It ensures ABI compatibility by passing your project's compiler through to CMake.
-
-### 2. Exporting to CMake
-When you build a library (`type = "lib"` or `dll`), Flappy generates a `dist/` directory:
-```text
-dist/
-  include/          # Public headers
-  lib/              # Compiled libraries (.lib, .a, .so)
-  cmake/
-    MyLibConfig.cmake # Standard CMake package config
-```
-
-#### How to use a Flappy library in CMake:
-In your `CMakeLists.txt`:
-```cmake
-list(APPEND CMAKE_PREFIX_PATH "path/to/flappy_project/dist")
-find_package(MyLib REQUIRED)
-target_link_libraries(your_app PRIVATE MyLib)
-```
-
----
-
-## ✨ Advanced Features
-
-### 1. Automatic Compilation Database
-Flappy generates `compile_commands.json` on every build/run. This provides **VS Code**, **Vim**, and **Zed** with perfect IntelliSense, including for headers located deep in the Flappy dependency cache.
-
-### 2. Smart Configuration Interceptor
-If you try to build on a platform that isn't configured in your `flappy.toml`, Flappy will catch it and offer to guide you through an interactive setup wizard instead of failing.
-
-### 3. Recursive Dependencies
-Flappy projects understand each other. If `Project A` depends on `Project B`, Flappy will recursively build `Project B` and correctly propagate all transitive include paths and libraries.
+*   `init [name]`: Create project.
+*   `build`: Build debug.
+    *   `--release`: Build release.
+    *   `--no-deps`: **(Advanced)** Skip dependency checks (internal use).
+*   `run`: Build and run.
+*   `test`: Run tests.
+*   `clean`: Remove `bin` and `obj`.
+*   `sync`: Resolve and install dependencies (updates `flappy.lock`).
+*   `update [name]`: Update a specific dependency from source.
+*   `compdb`: Generate `compile_commands.json` for IDEs.

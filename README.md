@@ -1,98 +1,63 @@
 # Flappy 🐦
 
-Flappy is a modern, lightweight, and fast C/C++ package manager and build tool written in F#. It provides a **Cargo-like experience** for C++ developers, replacing complex CMake or Makefile configurations with a simple, human-readable `flappy.toml`.
+**Stop writing CMakeLists. Start coding C++.**
 
-👉 **[View Full User Manual (Manual.md)](Manual.md)**
+Flappy is a modern, lightweight build system and package manager that brings the **Rust/Cargo experience** to C++. It eliminates the pain of dependency management, especially for legacy libraries like OpenSSL or FFmpeg.
 
-## ✨ Features
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
--   **Zero-Config Build**: Automatically detects MSVC, GCC, and Clang.
--   **Smart Dependencies**: Pull dependencies directly from Git or URLs.
--   **Automated Testing**: Standardized `flappy test` command for unit tests.
--   **Editor Integration**: Auto-generates `compile_commands.json` for precise code completion.
--   **CMake-Friendly**: Automatically exports `<Package>Config.cmake` for seamless use in CMake projects.
--   **Hierarchical Profiles**: Define custom targets like `[build.arm64]` with platform-specific overrides.
--   **Cross-Platform**: Designed for Windows, Linux (WSL/Nix), and macOS.
+## ✨ Why Flappy?
 
-## 🚀 Getting Started
+*   **Zero-Config Build**: No more `CMakeLists.txt` boilerplate. Just `flappy run`.
+*   **"Escape Hatch" for Legacy Libs**: Use `build_cmd` to build *any* library (Make, Autotools, NMake) while keeping it managed.
+*   **Smart Cross-Platform**: Define `[build.windows]` and `[build.linux]` overrides in one file.
+*   **Automated Injection**: Flappy automatically injects header/lib paths into environment variables. `cl main.c` just works.
+*   **Editor Ready**: Auto-generates `compile_commands.json` for VS Code / clangd.
 
-### Installation
-
-If you have [Just](https://github.com/casey/just) and the [.NET SDK](https://dotnet.microsoft.com/download) installed:
+## 🚀 Quick Start
 
 ```bash
+# 1. Install (requires .NET 8+)
 git clone https://github.com/your-username/flappy.git
-cd flappy
-just install
-```
+dotnet build -c Release
 
-### Create a New Project
+# 2. Create Project
+flappy init my_game -l c++ -s c++20
 
-```bash
-flappy init my_project
-cd my_project
+# 3. Add Dependencies
+# (Example: Add fmt via git)
+flappy add fmt --git https://github.com/fmtlib/fmt.git
+
+# 4. Run!
 flappy run
 ```
 
-## 📦 Dependency Management
+## 📦 Handling "Hard" Dependencies (Example)
 
-Add dependencies to your `flappy.toml`:
-
-```toml
-[dependencies]
-# From Git
-fmt = { git = "https://github.com/fmtlib/fmt", tag = "11.0.2" }
-
-# Single Header from URL
-stb_image = { url = "https://raw.githubusercontent.com/nothings/stb/master/stb_image.h" }
-
-# Local Flappy or CMake projects
-my_lib = { path = "../my_lib" }
-```
-
-## 🛠️ Usage
-
--   `flappy init [name]`: Start the interactive project wizard.
--   `flappy build [profile]`: Build the project (or a specific profile/target).
--   `flappy run [profile]`: Build and run the executable.
--   `flappy test [profile]`: Build and run tests.
--   `flappy profile add`: Interactively create a new build profile.
--   `flappy compdb`: Generate compilation database for IDEs.
--   `flappy cache clean`: Clear the global dependency cache.
-
-## 📄 Configuration (`flappy.toml`)
-
-Flappy uses a layered configuration system:
+How to consume a raw C library (like `zlib`) without headaches:
 
 ```toml
-[package]
-name = "hello_world"
-version = "0.1.0"
+[dependencies.zlib]
+git = "https://github.com/madler/zlib.git"
+# Tell Flappy where the built lib ends up
+libs = ["zlib.lib"]
 
-[build]
-language = "c++"
-standard = "c++20"
-output = "bin/hello"
-type = "exe"
+# Windows build logic
+[dependencies.zlib.windows]
+build_cmd = "nmake -f win32/Makefile.msc"
 
-[build.windows]
-compiler = "cl"
-arch = "x64"
-
-[build.linux]
-compiler = "g++"
-arch = "arm64"
+# Linux build logic
+[dependencies.zlib.linux]
+build_cmd = "./configure && make"
+libs = ["libz.a"]
 ```
 
-## 🏗️ Project Structure
+## 🛠 Features
 
-```text
-my_project/
-├── flappy.toml      # Project configuration
-├── src/             # Source files (.cpp)
-│   └── main.cpp
-└── packages/        # Managed dependencies (linked automatically)
-```
+*   **Topological Build Order**: Automatically resolves dependency graphs.
+*   **Artifact Isolation**: Separate caches for Debug/Release builds (ABI Safe).
+*   **Incremental Builds**: Smart hashing skips expensive rebuilds.
+*   **Manual Bridging**: Fix dependencies for libraries you don't own.
 
 ## 📜 License
 
