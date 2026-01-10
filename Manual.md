@@ -1,66 +1,68 @@
-# 🐦 Flappy 全量使用手册 (v0.0.1)
+# 🐦 Flappy Full Reference Manual (v0.0.1)
 
-Flappy 旨在为 C++ 提供“开箱即用”的构建体验。本手册涵盖了 Flappy 的所有功能、配置项及高级用法。
+[中文版](Manual_CN.md)
+
+Flappy is designed to provide an "out-of-the-box" build experience for C++. This manual covers all features, configuration options, and advanced usage of Flappy.
 
 ---
 
-## 🛠 配置文件: `flappy.toml`
+## 🛠 Configuration File: `flappy.toml`
 
-这是项目的核心。它由四个主要部分组成：`[package]`, `[build]`, `[test]`, 和 `[dependencies]`。
+The core of your project. It consists of four main sections: `[package]`, `[build]`, `[test]`, and `[dependencies]`.
 
-### 1. 项目元数据 `[package]`
-| 字段 | 说明 | 示例 |
+### 1. Project Metadata `[package]`
+| Field | Description | Example |
 | :--- | :--- | :--- |
-| `name` | 项目名称（影响默认输出文件名） | `"my_project"` |
-| `version` | 项目版本 | `"0.1.0"` |
-| `authors` | 作者列表 (数组) | `["Name <email@example.com>"]` |
+| `name` | Project name (affects default output filename) | `"my_project"` |
+| `version` | Project version | `"0.1.0"` |
+| `authors` | List of authors (array) | `["Name <email@example.com>"]` |
 
 ---
 
-### 2. 构建配置 `[build]`
-这是 Flappy 最强大的地方，支持多层级覆盖。
+### 2. Build Configuration `[build]`
+This is where Flappy's power lies, supporting multi-level overrides.
 
-#### 核心字段：
-*   **`language`**: `"c"` 或 `"c++"`。
-*   **`standard`**: 语言标准，如 `"c++17"`, `"c++20"`, `"c11"`。
-*   **`type`**: 输出类型：`"exe"`, `"lib"` (静态库), `"dll"` (动态库)。
-*   **`output`**: 输出路径及文件名，如 `"bin/app"`。
-*   **`compiler`**: 编译器命令，如 `"cl"`, `"g++"`, `"clang++"`。
-*   **`arch`**: 目标架构：`"x64"`, `"x86"`, `"arm64"`。
-*   **`defines`**: 宏定义数组，如 `["DEBUG", "VERSION=1"]`。
-*   **`flags`**: 编译器原生标志数组，如 `["/W4", "-O3"]`。
+#### Core Fields:
+*   **`language`**: `"c"` or `"c++"`.
+*   **`standard`**: Language standard, e.g., `"c++17"`, `"c++20"`, `"c11"`.
+*   **`type`**: Output type: `"exe"`, `"lib"` (static library), `"dll"` (dynamic library).
+*   **`output`**: Output path and filename, e.g., `"bin/app"`.
+*   **`compiler`**: Compiler command, e.g., `"cl"`, `"g++"`, `"clang++"`.
+*   **`arch`**: Target architecture: `"x64"`, `"x86"`, `"arm64"`.
+*   **`defines`**: Array of preprocessor definitions, e.g., `["DEBUG", "VERSION=1"]`.
+*   **`flags`**: Array of native compiler flags, e.g., `["/W4", "-O3"]`.
 
-#### 层级覆盖 (Inheritance)：
-你可以通过后缀来针对特定环境进行细分配置。合并优先级如下（高优先级覆盖低优先级）：
+#### Hierarchical Overrides (Inheritance):
+You can refine configurations for specific environments using suffixes. Merging priority is as follows (higher overrides lower):
 
-1.  `[build]` (基础配置)
-2.  `[build.debug]` 或 `[build.release]` (模式覆盖)
-3.  `[build.windows]` / `[build.linux]` / `[build.macos]` (平台覆盖)
-4.  `[build.windows.debug]` (平台 + 模式组合覆盖)
-5.  `[build.target_name]` (自定义 Profile 覆盖，详见下文)
+1.  `[build]` (Base configuration)
+2.  `[build.debug]` or `[build.release]` (Mode override)
+3.  `[build.windows]` / `[build.linux]` / `[build.macos]` (Platform override)
+4.  `[build.windows.debug]` (Platform + Mode combination override)
+5.  `[build.target_name]` (Custom Profile override, see below)
 
-**示例：**
+**Example:**
 ```toml
 [build]
 standard = "c++20"
 defines = ["GLOBAL"]
 
 [build.debug]
-defines = ["DEBUG_ONLY"] # 仅在 debug 模式生效
+defines = ["DEBUG_ONLY"] # Only active in debug mode
 
 [build.windows]
-compiler = "cl" # Windows 默认用 cl
+compiler = "cl" # Default to cl on Windows
 
 [build.windows.release]
-flags = ["/O2"] # 仅在 Windows 的 Release 模式生效
+flags = ["/O2"] # Only active in Windows Release mode
 ```
 
 ---
 
-### 3. 依赖管理 `[dependencies]`
-支持 Git, URL, 本地路径，并能处理非 Flappy 项目。
+### 3. Dependency Management `[dependencies]`
+Supports Git, URL, and local paths, and handles non-Flappy projects.
 
-#### 定义依赖：
+#### Defining Dependencies:
 ```toml
 [dependencies.fmt]
 git = "https://github.com/fmtlib/fmt.git"
@@ -73,18 +75,18 @@ url = "https://example.com/stb_image.h"
 path = "../mylib"
 ```
 
-#### 依赖高级字段：
-*   **`build_cmd`**: 自定义构建命令。如果存在，Flappy 将调用它而不是自动编译。
-*   **`dependencies`**: **(桥接)** 手动指定此依赖项还依赖于哪些其他依赖项（用于非 Flappy 项目）。
-*   **`include_dirs`**: 手动指定头文件目录，如 `["include", "src/public"]`。
-*   **`lib_dirs`**: 手动指定库文件搜索目录。
-*   **`libs`**: 手动指定要链接的库文件名，如 `["zlib.lib"]`。
-*   **`defines`**: 传递给该依赖项及其使用者的宏。
+#### Advanced Dependency Fields:
+*   **`build_cmd`**: Custom build command. If present, Flappy calls this instead of automatic compilation.
+*   **`dependencies`**: **(Bridging)** Manually specify what other dependencies this item depends on (for non-Flappy projects).
+*   **`include_dirs`**: Manually specify header directories, e.g., `["include", "src/public"]`.
+*   **`lib_dirs`**: Manually specify library search directories.
+*   **`libs`**: Manually specify library filenames to link, e.g., `["zlib.lib"]`.
+*   **`defines`**: Macros propagated to this dependency and its consumers.
 
-#### 依赖的平台/模式覆盖：
-同样支持 `[dependencies.pkg.windows]`, `[dependencies.pkg.debug]` 等。
+#### Platform/Mode Overrides for Dependencies:
+Supports `[dependencies.pkg.windows]`, `[dependencies.pkg.debug]`, etc., following the same hierarchy as `[build]`.
 
-**终极示例：**
+**Ultimate Example:**
 ```toml
 [dependencies.openssl]
 git = "..."
@@ -94,54 +96,54 @@ libs = ["libssld.lib"]
 
 [dependencies.libcurl]
 git = "..."
-dependencies = ["openssl"] # 声明 libcurl 依赖 openssl
+dependencies = ["openssl"] # Declare that libcurl depends on openssl
 ```
 
 ---
 
-## 🚀 环境变量注入 (Environment Injection)
+## 🚀 Environment Injection
 
-当 Flappy 运行 `build_cmd` 时，会自动注入以下变量，供你的脚本使用：
+When Flappy runs a `build_cmd`, it automatically injects variables for your script to use:
 
-| 变量名 | 说明 |
+| Variable | Description |
 | :--- | :--- |
-| `CC` / `CXX` | 当前配置的编译器路径 |
-| `FLAPPY_DEP_<NAME>_INCLUDE` | 依赖项 `<NAME>` 的头文件目录路径 |
-| `FLAPPY_DEP_<NAME>_LIB` | 依赖项 `<NAME>` 的库文件路径 |
-| `INCLUDE` / `LIB` | (MSVC) 自动追加了依赖项路径的系统变量 |
-| `CPATH` / `LIBRARY_PATH` | (GCC/Clang) 自动追加了依赖项路径的系统变量 |
+| `CC` / `CXX` | Path to the currently configured compiler |
+| `FLAPPY_DEP_<NAME>_INCLUDE` | Path to the include directory of dependency `<NAME>` |
+| `FLAPPY_DEP_<NAME>_LIB` | Path to the library files of dependency `<NAME>` |
+| `INCLUDE` / `LIB` | (MSVC) System variables automatically appended with dependency paths |
+| `CPATH` / `LIBRARY_PATH` | (GCC/Clang) System variables automatically appended with dependency paths |
 
-*注：`<NAME>` 会被转换为大写且将 `-` 替换为 `_`。*
-
----
-
-## 💻 命令行参考 (CLI)
-
-### 基础命令
-*   **`flappy init [name]`**: 在当前目录或新目录初始化项目。
-*   **`flappy build [profile]`**: 执行构建。
-    *   `--release`: 切换到 Release 模式。
-    *   `--no-deps`: 仅编译当前项目，跳过依赖检查（用于子进程加速）。
-    *   `-t, --target <name>`: 使用 `[build.<name>]` 定义的特定配置。
-*   **`flappy run [profile] [-- <args>]`**: 构建并运行。`--` 之后的参数将传递给程序。
-*   **`flappy test [profile]`**: 构建并运行 `[test]` 节定义的测试。
-*   **`flappy sync`**: 解析依赖图，下载并构建所有依赖，更新 `flappy.lock`。
-*   **`flappy clean`**: 清理构建产物 (`bin/`, `obj/`, `dist/`)。
-
-### 辅助命令
-*   **`flappy compdb [profile]`**: 强制生成 `compile_commands.json`。
-*   **`flappy profile add`**: 交互式添加自定义构建 Profile。
-*   **`flappy xplat`**: 交互式配置跨平台工具链。
-*   **`flappy cache clean`**: 清理全局依赖缓存。
+*Note: `<NAME>` is converted to uppercase and dashes `-` are replaced with underscores `_`.*
 
 ---
 
-## 🔄 构建生命周期
+## 💻 CLI Reference
 
-1.  **Resolution**: 解析 `flappy.toml`，构建全局依赖图 (DAG)，检测循环和版本冲突。
-2.  **Fetching**: 下载所有缺失的依赖源码。
-3.  **Dependency Build**: 按照拓扑顺序（从叶子到根）构建依赖。
-    *   如果是 Flappy 项目，递归调用 `flappy build --no-deps`。
-    *   如果是 Raw 项目，调用 `build_cmd`。
-4.  **Main Build**: 编译当前项目源码，并链接所有依赖产物。
-5.  **Distribution**: 将库文件和头文件收集到 `dist/` 目录，生成 `CMake` 配置文件。
+### Basic Commands
+*   **`flappy init [name]`**: Initialize a project in the current or a new directory.
+*   **`flappy build [profile]`**: Execute build.
+    *   `--release`: Switch to Release mode.
+    *   `--no-deps`: **(Advanced)** Skip dependency checks (internal optimization).
+    *   `-t, --target <name>`: Use specific configuration defined in `[build.<name>]`.
+*   **`flappy run [profile] [-- <args>]`**: Build and run. Arguments after `--` are passed to the program.
+*   **`flappy test [profile]`**: Build and run tests defined in the `[test]` section.
+*   **`flappy sync`**: Resolve graph, download/build all dependencies, and update `flappy.lock`.
+*   **`flappy clean`**: Remove build artifacts (`bin/`, `obj/`, `dist/`).
+
+### Helper Commands
+*   **`flappy compdb [profile]`**: Force generate `compile_commands.json`.
+*   **`flappy profile add`**: Interactively add a custom build Profile.
+*   **`flappy xplat`**: Interactively configure cross-platform toolchains.
+*   **`flappy cache clean`**: Clear the global dependency cache.
+
+---
+
+## 🔄 Build Lifecycle
+
+1.  **Resolution**: Parses `flappy.toml`, builds global dependency graph (DAG), detects cycles and version conflicts.
+2.  **Fetching**: Downloads missing dependency sources.
+3.  **Dependency Build**: Builds dependencies in topological order (leaf to root).
+    *   For Flappy projects: Recursively calls `flappy build --no-deps`.
+    *   For Raw projects: Calls `build_cmd`.
+4.  **Main Build**: Compiles current project source and links all dependency artifacts.
+5.  **Distribution**: Collects libraries and headers into `dist/`, and generates `CMake` config files.

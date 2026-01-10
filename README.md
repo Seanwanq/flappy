@@ -2,6 +2,8 @@
 
 **Stop writing CMakeLists. Start coding C++.**
 
+[中文版](README_CN.md)
+
 Flappy is a modern, lightweight build system and package manager that brings the **Rust/Cargo experience** to C++. It eliminates the pain of dependency management, especially for legacy libraries like OpenSSL or FFmpeg.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)

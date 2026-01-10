@@ -41,7 +41,7 @@ let installDependencies (deps: Dependency list) (profile: BuildProfile) (compile
     match resolve deps profile compiler arch with
     | Error e -> Error ("Dependency Resolution Failed:\n" + e)
     | Ok sortedNodes ->
-        Log.info "Graph" (sprintf "Resolved %d dependencies" sortedNodes.Length)
+        Log.info "Graph" $"Resolved {sortedNodes.Length} dependencies"
         let rec buildRecursive (nodes: ResolvedNode list) (acc: DependencyMetadata list) =
             match nodes with
             | [] -> Ok (List.rev acc)

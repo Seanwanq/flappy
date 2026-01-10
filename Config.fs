@@ -321,30 +321,34 @@ let saveLock (filePath: string) (lock: LockConfig) =
     sb.AppendLine() |> ignore
     sb.AppendLine "[[dependencies]]" |> ignore
     lock.Entries
-    |> List.iteri (fun i e ->
-        if i > 0 then sb.AppendLine "\n[[dependencies]]" |> ignore
-        sb.AppendLine (sprintf "name = \"%s\" " e.Name) |> ignore
-        sb.AppendLine (sprintf "source = \"%s\" " e.Source) |> ignore
-        sb.AppendLine (sprintf "resolved = \"%s\" " e.Resolved) |> ignore) 
+        |> List.iteri (fun i e ->
+            if i > 0 then sb.AppendLine "\n[[dependencies]]" |> ignore
+            sb.AppendLine $"name = \"{e.Name}\" " |> ignore
+            sb.AppendLine $"source = \"{e.Source}\" " |> ignore
+            sb.AppendLine $"resolved = \"{e.Resolved}\" " |> ignore) 
     File.WriteAllText(filePath, sb.ToString())
-
+    
 let addDependency (filePath: string) (name: string) (tomlLine: string) : Result<unit, string> =
     try
-        if not (File.Exists filePath) then Error "flappy.toml not found."
+        if not (File.Exists filePath) then 
+            Error "flappy.toml not found."
         else
             let lines = File.ReadAllLines filePath |> Array.toList
             let regex = Regex(sprintf "^\\s*%s\\s*=" (Regex.Escape name), RegexOptions.IgnoreCase)
+            
             if lines |> List.exists (fun l -> regex.IsMatch l) then
                 Error (sprintf "Dependency '%s' already exists in flappy.toml." name)
             else
-                let newContent =
-                    match lines |> List.tryFindIndex (fun l -> l.Trim() = "[dependencies]") with
+                let idxOpt = lines |> List.tryFindIndex (fun l -> l.Trim() = "[dependencies]")
+                let newContent = 
+                    match idxOpt with
                     | Some idx ->
                         let updated = lines.[0..idx] @ [ tomlLine ] @ lines.[idx + 1 ..]
                         String.concat "\n" updated
                     | None ->
                         let updated = lines @ [ "[dependencies]"; tomlLine ]
                         String.concat "\n" updated
+                
                 File.WriteAllText(filePath, formatToml newContent)
                 Ok()
     with ex -> Error ex.Message
@@ -378,9 +382,9 @@ let getVsInstallations () : VsInstallation list =
             let output = p.StandardOutput.ReadToEnd()
             p.WaitForExit()
             if p.ExitCode = 0 then
-                let nameRegex = Regex("\"displayName\":\\s*\"(?<val>.*?)\"")
-                let pathRegex = Regex("\"installationPath\":\\s*\"(?<val>.*?)\"")
-                let versionRegex = Regex("\"productDisplayVersion\":\\s*\"(?<val>.*?)\"")
+                let nameRegex = Regex("\"displayName\":\\s*\"(?<val>.*?)\"", RegexOptions.Compiled)
+                let pathRegex = Regex("\"installationPath\":\\s*\"(?<val>.*?)\"", RegexOptions.Compiled)
+                let versionRegex = Regex("\"productDisplayVersion\":\\s*\"(?<val>.*?)\"", RegexOptions.Compiled)
                 
                 let names = nameRegex.Matches(output) |> Seq.cast<Match> |> Seq.map (fun m -> m.Groups.["val"].Value) |> Seq.toList
                 let paths = pathRegex.Matches(output) |> Seq.cast<Match> |> Seq.map (fun m -> m.Groups.["val"].Value.Replace("\\\\", "\\")) |> Seq.toList
