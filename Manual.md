@@ -1,107 +1,147 @@
-# 🐦 Flappy User Manual (v0.0.1)
+# 🐦 Flappy 全量使用手册 (v0.0.1)
 
-Flappy is a modern build system and package manager for C++. It brings the ease of Cargo (Rust) to the C++ ecosystem.
-
-## 📚 Quick Start
-
-```bash
-# 1. Create a new project
-flappy init my_app
-
-# 2. Add a dependency
-flappy add fmt --git https://github.com/fmtlib/fmt.git
-
-# 3. Build & Run
-flappy run
-```
+Flappy 旨在为 C++ 提供“开箱即用”的构建体验。本手册涵盖了 Flappy 的所有功能、配置项及高级用法。
 
 ---
 
-## 🔧 The "Hard" Stuff: Managing Complex C Dependencies
+## 🛠 配置文件: `flappy.toml`
 
-Flappy shines where other tools struggle: integrating "Raw" libraries (like OpenSSL, FFmpeg) that don't use CMake or Flappy naturally.
+这是项目的核心。它由四个主要部分组成：`[package]`, `[build]`, `[test]`, 和 `[dependencies]`。
 
-### Scenario: "I need to use libcurl, which depends on OpenSSL"
+### 1. 项目元数据 `[package]`
+| 字段 | 说明 | 示例 |
+| :--- | :--- | :--- |
+| `name` | 项目名称（影响默认输出文件名） | `"my_project"` |
+| `version` | 项目版本 | `"0.1.0"` |
+| `authors` | 作者列表 (数组) | `["Name <email@example.com>"]` |
 
-Problem:
-1.  `libcurl` source comes from git, has no `flappy.toml`.
-2.  `openssl` source comes from git, has no `flappy.toml`.
-3.  `libcurl` build needs `openssl` headers.
-4.  On Windows `openssl` uses `nmake`, on Linux it uses `make`.
+---
 
-**Solution: The "Bridge" Config**
+### 2. 构建配置 `[build]`
+这是 Flappy 最强大的地方，支持多层级覆盖。
 
-You define the relationship in your **Root** `flappy.toml`.
+#### 核心字段：
+*   **`language`**: `"c"` 或 `"c++"`。
+*   **`standard`**: 语言标准，如 `"c++17"`, `"c++20"`, `"c11"`。
+*   **`type`**: 输出类型：`"exe"`, `"lib"` (静态库), `"dll"` (动态库)。
+*   **`output`**: 输出路径及文件名，如 `"bin/app"`。
+*   **`compiler`**: 编译器命令，如 `"cl"`, `"g++"`, `"clang++"`。
+*   **`arch`**: 目标架构：`"x64"`, `"x86"`, `"arm64"`。
+*   **`defines`**: 宏定义数组，如 `["DEBUG", "VERSION=1"]`。
+*   **`flags`**: 编译器原生标志数组，如 `["/W4", "-O3"]`。
 
+#### 层级覆盖 (Inheritance)：
+你可以通过后缀来针对特定环境进行细分配置。合并优先级如下（高优先级覆盖低优先级）：
+
+1.  `[build]` (基础配置)
+2.  `[build.debug]` 或 `[build.release]` (模式覆盖)
+3.  `[build.windows]` / `[build.linux]` / `[build.macos]` (平台覆盖)
+4.  `[build.windows.debug]` (平台 + 模式组合覆盖)
+5.  `[build.target_name]` (自定义 Profile 覆盖，详见下文)
+
+**示例：**
 ```toml
-[package]
-name = "my_app"
-version = "0.1.0"
+[build]
+standard = "c++20"
+defines = ["GLOBAL"]
 
-# 1. Define OpenSSL (The Leaf)
-[dependencies.openssl]
-git = "https://github.com/openssl/openssl.git"
-tag = "openssl-3.2.0"
-# Tell Flappy where the built .lib files end up (so they can be linked)
-libs = ["libssl.lib", "libcrypto.lib"] 
+[build.debug]
+defines = ["DEBUG_ONLY"] # 仅在 debug 模式生效
 
-# 1.1 Platform-Specific Build Commands
-[dependencies.openssl.windows]
-build_cmd = "perl Configure VC-WIN64A && nmake"
+[build.windows]
+compiler = "cl" # Windows 默认用 cl
 
-[dependencies.openssl.linux]
-build_cmd = "./config && make"
-libs = ["libssl.a", "libcrypto.a"] # Override libs for Linux
-
-# 2. Define LibCurl (The Middleman)
-[dependencies.libcurl]
-git = "https://github.com/curl/curl.git"
-# CRITICAL: Manually tell Flappy that libcurl depends on openssl
-dependencies = ["openssl"] 
-libs = ["libcurl.lib"]
-
-[dependencies.libcurl.windows]
-# CRITICAL: Use injected environment variable to find OpenSSL headers
-# Flappy automatically sets %FLAPPY_DEP_OPENSSL_INCLUDE%
-build_cmd = """
-cmake . -DOPENSSL_INCLUDE_DIR="%FLAPPY_DEP_OPENSSL_INCLUDE%" 
-        -DOPENSSL_ROOT_DIR="%FLAPPY_DEP_OPENSSL_ROOT%" 
-        && cmake --build . --config Release
-"""
+[build.windows.release]
+flags = ["/O2"] # 仅在 Windows 的 Release 模式生效
 ```
-
-### Key Concepts
-
-#### 1. Platform & Mode Overrides
-Use `[dependencies.pkg.windows]`, `[dependencies.pkg.debug]`, `[dependencies.pkg.windows.debug]` etc. to override:
-*   `build_cmd`: The command to build the library.
-*   `libs`: List of library files to link against.
-*   `defines`: Preprocessor definitions.
-
-Hierarchy: `Base` -> `Mode` -> `Profile` -> `Platform`.
-
-#### 2. Environment Injection
-When Flappy runs your `build_cmd`, it injects helpful variables:
-*   `FLAPPY_DEP_<NAME>_INCLUDE`: Path to `include/` of dependency.
-*   `FLAPPY_DEP_<NAME>_LIB`: Path to `lib/` of dependency.
-*   `CC` / `CXX`: Path to your configured compiler.
-*   `INCLUDE` / `LIB`: (MSVC) Automatically updated with dependency paths.
-*   `CPATH` / `LIBRARY_PATH`: (GCC/Clang) Automatically updated with dependency paths.
-
-#### 3. Bridging (`dependencies = [...]`)
-If a library is "Raw" (no `flappy.toml`), you can specify its dependencies manually in the parent config using the `dependencies` list. This ensures Flappy builds them in the correct order and passes the metadata.
 
 ---
 
-## 📖 CLI Reference
+### 3. 依赖管理 `[dependencies]`
+支持 Git, URL, 本地路径，并能处理非 Flappy 项目。
 
-*   `init [name]`: Create project.
-*   `build`: Build debug.
-    *   `--release`: Build release.
-    *   `--no-deps`: **(Advanced)** Skip dependency checks (internal use).
-*   `run`: Build and run.
-*   `test`: Run tests.
-*   `clean`: Remove `bin` and `obj`.
-*   `sync`: Resolve and install dependencies (updates `flappy.lock`).
-*   `update [name]`: Update a specific dependency from source.
-*   `compdb`: Generate `compile_commands.json` for IDEs.
+#### 定义依赖：
+```toml
+[dependencies.fmt]
+git = "https://github.com/fmtlib/fmt.git"
+tag = "10.2.1"
+
+[dependencies.stb]
+url = "https://example.com/stb_image.h"
+
+[dependencies.mylib]
+path = "../mylib"
+```
+
+#### 依赖高级字段：
+*   **`build_cmd`**: 自定义构建命令。如果存在，Flappy 将调用它而不是自动编译。
+*   **`dependencies`**: **(桥接)** 手动指定此依赖项还依赖于哪些其他依赖项（用于非 Flappy 项目）。
+*   **`include_dirs`**: 手动指定头文件目录，如 `["include", "src/public"]`。
+*   **`lib_dirs`**: 手动指定库文件搜索目录。
+*   **`libs`**: 手动指定要链接的库文件名，如 `["zlib.lib"]`。
+*   **`defines`**: 传递给该依赖项及其使用者的宏。
+
+#### 依赖的平台/模式覆盖：
+同样支持 `[dependencies.pkg.windows]`, `[dependencies.pkg.debug]` 等。
+
+**终极示例：**
+```toml
+[dependencies.openssl]
+git = "..."
+[dependencies.openssl.windows.debug]
+build_cmd = "nmake -f Makefile.msvc"
+libs = ["libssld.lib"]
+
+[dependencies.libcurl]
+git = "..."
+dependencies = ["openssl"] # 声明 libcurl 依赖 openssl
+```
+
+---
+
+## 🚀 环境变量注入 (Environment Injection)
+
+当 Flappy 运行 `build_cmd` 时，会自动注入以下变量，供你的脚本使用：
+
+| 变量名 | 说明 |
+| :--- | :--- |
+| `CC` / `CXX` | 当前配置的编译器路径 |
+| `FLAPPY_DEP_<NAME>_INCLUDE` | 依赖项 `<NAME>` 的头文件目录路径 |
+| `FLAPPY_DEP_<NAME>_LIB` | 依赖项 `<NAME>` 的库文件路径 |
+| `INCLUDE` / `LIB` | (MSVC) 自动追加了依赖项路径的系统变量 |
+| `CPATH` / `LIBRARY_PATH` | (GCC/Clang) 自动追加了依赖项路径的系统变量 |
+
+*注：`<NAME>` 会被转换为大写且将 `-` 替换为 `_`。*
+
+---
+
+## 💻 命令行参考 (CLI)
+
+### 基础命令
+*   **`flappy init [name]`**: 在当前目录或新目录初始化项目。
+*   **`flappy build [profile]`**: 执行构建。
+    *   `--release`: 切换到 Release 模式。
+    *   `--no-deps`: 仅编译当前项目，跳过依赖检查（用于子进程加速）。
+    *   `-t, --target <name>`: 使用 `[build.<name>]` 定义的特定配置。
+*   **`flappy run [profile] [-- <args>]`**: 构建并运行。`--` 之后的参数将传递给程序。
+*   **`flappy test [profile]`**: 构建并运行 `[test]` 节定义的测试。
+*   **`flappy sync`**: 解析依赖图，下载并构建所有依赖，更新 `flappy.lock`。
+*   **`flappy clean`**: 清理构建产物 (`bin/`, `obj/`, `dist/`)。
+
+### 辅助命令
+*   **`flappy compdb [profile]`**: 强制生成 `compile_commands.json`。
+*   **`flappy profile add`**: 交互式添加自定义构建 Profile。
+*   **`flappy xplat`**: 交互式配置跨平台工具链。
+*   **`flappy cache clean`**: 清理全局依赖缓存。
+
+---
+
+## 🔄 构建生命周期
+
+1.  **Resolution**: 解析 `flappy.toml`，构建全局依赖图 (DAG)，检测循环和版本冲突。
+2.  **Fetching**: 下载所有缺失的依赖源码。
+3.  **Dependency Build**: 按照拓扑顺序（从叶子到根）构建依赖。
+    *   如果是 Flappy 项目，递归调用 `flappy build --no-deps`。
+    *   如果是 Raw 项目，调用 `build_cmd`。
+4.  **Main Build**: 编译当前项目源码，并链接所有依赖产物。
+5.  **Distribution**: 将库文件和头文件收集到 `dist/` 目录，生成 `CMake` 配置文件。
